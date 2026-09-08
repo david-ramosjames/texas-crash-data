@@ -18,7 +18,7 @@ export default function Login() {
     }} style={{ display: 'grid', gap: 18, marginTop: 24 }}>
       <label>Email<Input name="email" type="email" autoComplete="username" required /></label>
       <label>Password<Input name="password" type="password" autoComplete="current-password" required /></label>
-      {error && <p role="alert">{error}</p>}<Button disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Button>
+      {error && <p role="alert">{error}</p>}<Button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</Button>
     </form>
     <p style={{ marginTop: 24 }}>Ask your workspace administrator to create or reset your account. Public sign-up is disabled.</p>
   </main>;
