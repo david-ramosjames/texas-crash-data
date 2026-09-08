@@ -11,20 +11,22 @@ Verified locally on 2026-09-07:
 - Research regression runs every cohort/dimension on PostgreSQL; tests include revision precedence, equal-timestamp conflicts, transaction rollback, discovery/editorial preservation, job recovery and retries.
 - Source/secret checks found no original CSVs, Excel files, database dumps, local environment files, or API tokens in tracked files.
 
-Not yet verified: real Supabase login/storage/PostGIS connectivity, Railway cloud deployment, full 2020–present corpus performance, or live OpenAI calls. These need your cloud configuration. Existing Sites data and editorial records have not been moved.
+Verified in GitHub Actions on 2026-09-08: native PostgreSQL/PostGIS migrations (including a second idempotent migration run), all automated tests, TypeScript, and the Linux production build passed. The native test verifies generated geographic points, radius queries, RLS configuration, and worker advisory locks. See the successful run linked below.
 
-## GitHub handoff blocker
+Not yet verified: real Supabase login/storage/project connectivity, Railway cloud deployment, full 2020–present corpus performance, or live OpenAI calls. These need your cloud configuration. Existing Sites data and editorial records have not been moved.
 
-The destination was confirmed empty and public. Local Git had no usable credentials. The connected GitHub integration could read repository metadata but its attempted initial file write was rejected with HTTP 403, `Resource not accessible by integration`. No remote content was created by that attempt. The migration is committed in this local checkout.
+## GitHub handoff
 
-To authorize a normal Git push, sign in from your own terminal:
+Resolved on 2026-09-08: the owner signed in through GitHub CLI, and the migration was pushed successfully to `main` in `david-ramosjames/texas-crash-data`. Repository visibility remains public; original data and secrets are excluded. The first CI run is available at https://github.com/david-ramosjames/texas-crash-data/actions/runs/34258690295.
+
+For a future machine that needs GitHub authentication:
 
 ```powershell
 gh auth login --hostname github.com --git-protocol https --web --scopes workflow
 gh auth setup-git
 ```
 
-Choose the GitHub account with write access to `david-ramosjames/texas-crash-data`. The workflow scope is for the included GitHub Actions workflow. Never paste the login code, access token, or password into a chat. After authentication, Codex can complete the push and inspect CI, or you can run:
+Choose the GitHub account with write access to `david-ramosjames/texas-crash-data`. The workflow scope is for the included GitHub Actions workflow. Never paste the login code, access token, or password into a chat. After authentication, push from this checkout with:
 
 ```powershell
 git -C "C:\Users\david\Documents\Codex\2026-09-01\rev\outputs\texas-crash-data" push -u origin main
