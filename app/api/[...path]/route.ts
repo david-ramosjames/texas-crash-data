@@ -22,6 +22,7 @@ import { renderPage, exportCSV } from '@/lib/export';
 import { escapeHTML } from '@/lib/export';
 import { zip } from '@/lib/zip';
 import { aiInterpret, aiWrite } from '@/lib/ai';
+import { requestFailure } from '@/lib/errors';
 export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
   Response.json(body, {
@@ -414,19 +415,10 @@ async function handler(
     }
     return json({ error: 'Endpoint not found.' }, 404);
   } catch (error) {
-    const message =
-      error instanceof Error
-        ? error.message
-        : 'The operation could not finish.';
-    console.error('Studio request failed. See the authenticated response for validation details.');
-    return json(
-      {
-        error: (error as any)?.code || /password|connection|certificate/i.test(message)
-          ? 'The database rejected this operation. Check for duplicate records or invalid columns; your active data was not replaced.'
-          : message,
-      },
-      400,
-    );
+    const failure = requestFailure(error);
+    // Log only the validated code, never the raw error or request payload.
+    console.error('Studio request failed.', { code: failure.code });
+    return json(failure, 400);
   }
 }
 export const GET = handler;
