@@ -82,7 +82,8 @@ import {
   titleCase,
   slugify,
 } from '@/lib/contracts';
-import { uploadFiles, UploadProgress } from '@/lib/upload';
+import { uploadFiles, UploadProgress, validateResumeSelection } from '@/lib/upload';
+import { ImportRecovery, type RecoveryBatch } from '@/components/import-recovery';
 import { identify } from '@/lib/csv';
 import { renderPage } from '@/lib/export';
 
@@ -152,6 +153,7 @@ export default function Studio() {
     [dirty, setDirty] = useState(false),
     [editTab, setEditTab] = useState('write');
   const [files, setFiles] = useState<File[]>([]),
+    [resumeBatch, setResumeBatch] = useState<RecoveryBatch | null>(null),
     [progress, setProgress] = useState<UploadProgress | null>(null),
     [fileDetails, setFileDetails] = useState<any[]>([]),
     [batchDetails, setBatchDetails] = useState<string | null>(null),
@@ -163,6 +165,8 @@ export default function Studio() {
       color: '#245bda',
     });
   const fileInput = useRef<HTMLInputElement>(null),
+    uploadPanel = useRef<HTMLElement>(null),
+    activityPanel = useRef<HTMLElement>(null),
     folderInput = useRef<HTMLInputElement>(null),
     uploadAbort = useRef<AbortController | null>(null),
     initial = useRef(true);
@@ -291,6 +295,7 @@ export default function Studio() {
   };
   const chooseFiles = (incoming: File[]) => {
     setError('');
+    setFiles([]);
     try {
       const csv = incoming.filter((f) => f.name.toLowerCase().endsWith('.csv'));
       csv.forEach((f) => identify(f.name));
@@ -298,6 +303,7 @@ export default function Studio() {
         throw new Error(
           'Choose the original CSV files. Unzip any downloaded archives first.',
         );
+      if (resumeBatch) validateResumeSelection(csv, resumeBatch.id);
       setFiles(csv);
       setProgress(null);
     } catch (e) {
@@ -306,19 +312,53 @@ export default function Studio() {
   };
   const importNow = () =>
     action('Importing', async () => {
+      if (resumeBatch) validateResumeSelection(files, resumeBatch.id);
       uploadAbort.current = new AbortController();
-      const reports = await uploadFiles(
+      let reports;
+      try { reports = await uploadFiles(
         files,
         api,
         setProgress,
         uploadAbort.current.signal,
-      );
+      ); } catch (error) {
+        await refresh().catch(() => {});
+        throw error;
+      }
       await refresh();
       setFiles([]);
+      setResumeBatch(null);
       setNotice(
-        `${reports.length} batch(es) stored or already submitted. Processing and discovery continue in the background. Check the activity inbox below; it is safe to close this tab.`,
+        reports.some((report:any) => report.status === 'failed')
+          ? 'Some batches previously failed processing. Use Resume import on those batch rows; selecting files alone does not retry a failed job.'
+          : `${reports.length} batch(es) stored or already submitted. Processing and discovery continue in the background. Check the activity inbox below; it is safe to close this tab.`,
       );
     });
+  const showActivity = () => {
+    setBatchDetails(null);
+    activityPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const resumeImport = (batch: RecoveryBatch) => action('Resuming import', async () => {
+    setBatchDetails(null);
+    const result = await api(`imports/${batch.id}/resume`, {});
+    await refresh();
+    if (result.status === 'needs_files') {
+      setResumeBatch(batch); setFiles([]); setProgress(null);
+      setNotice('Select the same nine original files below, then click Resume selected batch. Stored chunks will be checked and reused.');
+      uploadPanel.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      setNotice(result.status === 'complete' ? 'This batch is already complete. Nothing was duplicated.'
+        : 'Import queued or already running. No files need to be uploaded again. The worker will continue from saved checkpoints.');
+      showActivity();
+    }
+  });
+  useEffect(() => {
+    if (!batchDetails) return;
+    let cancelled = false;
+    const update = () => api('files/' + batchDetails).then(rows => { if (!cancelled) setFileDetails(rows); }).catch(() => {});
+    update();
+    const timer = setInterval(update, 10000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [batchDetails]);
   useEffect(() => {
     if (!data) return;
     const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh().catch(() => {}); }, 10000);
@@ -394,6 +434,7 @@ export default function Studio() {
     return () => life.abort();
   }, []);
   const s = data?.summary,
+    detailBatch = s?.batches.find((batch: RecoveryBatch) => batch.id === batchDetails),
     findings: Finding[] = data?.findings || [],
     drafts: Draft[] = data?.drafts || [],
     domains: Domain[] = data?.domains || [];
@@ -1160,6 +1201,7 @@ export default function Studio() {
                     </span>
                   </div>
                   <section
+                    ref={uploadPanel}
                     className="upload-zone"
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {
@@ -1170,17 +1212,17 @@ export default function Studio() {
                     <div className="upload-icon">
                       <FolderUp />
                     </div>
-                    <h2>Drop your TxDOT CSV files here</h2>
+                    <h2>{resumeBatch ? `Resume ${resumeBatch.start} — ${resumeBatch.end}` : 'Drop your TxDOT CSV files here'}</h2>
                     <p>
-                      Select all nine files per extract. Multiple date ranges
-                      can be imported together.
+                      {resumeBatch ? 'Choose the same nine original CSVs for this batch. Existing verified chunks are reused; no records are deleted.'
+                        : 'Select all nine files per extract. Multiple date ranges can be imported together.'}
                     </p>
                     <div className="button-row">
                       <Button
                         disabled={!!busy}
                         onClick={() => fileInput.current?.click()}
                       >
-                        <Upload /> Choose files
+                        <Upload /> {resumeBatch ? 'Select original files to resume' : 'Choose files'}
                       </Button>
                       <Button
                         variant="outline"
@@ -1189,6 +1231,7 @@ export default function Studio() {
                       >
                         <FolderUp /> Choose folder
                       </Button>
+                      {resumeBatch && <Button type="button" variant="ghost" disabled={!!busy} onClick={() => { setResumeBatch(null); setFiles([]); setProgress(null); setNotice(''); }}>Cancel resume</Button>}
                     </div>
                     <input
                       hidden
@@ -1196,9 +1239,7 @@ export default function Studio() {
                       type="file"
                       accept=".csv"
                       multiple
-                      onChange={(e) =>
-                        chooseFiles(Array.from(e.target.files || []))
-                      }
+                      onChange={(e) => { chooseFiles(Array.from(e.target.files || [])); e.target.value = ''; }}
                     />
                     <input
                       hidden
@@ -1206,9 +1247,7 @@ export default function Studio() {
                       type="file"
                       multiple
                       {...({ webkitdirectory: '' } as any)}
-                      onChange={(e) =>
-                        chooseFiles(Array.from(e.target.files || []))
-                      }
+                      onChange={(e) => { chooseFiles(Array.from(e.target.files || [])); e.target.value = ''; }}
                     />
                     <span className="fine-print">
                       Original CSVs, not resaved Excel workbooks. Unzip
@@ -1226,7 +1265,7 @@ export default function Studio() {
                           MB
                         </h3>
                         <Button disabled={!!busy} onClick={importNow}>
-                          Validate & import <ArrowRight />
+                          {resumeBatch ? 'Resume selected batch' : 'Start import'} <ArrowRight />
                         </Button>
                       </div>
                       <div className="selected-files">
@@ -1264,10 +1303,11 @@ export default function Studio() {
                       )}
                     </section>
                   )}
-                  <section className="panel">
+                  <section className="panel" ref={activityPanel}>
                     <div className="section-heading compact"><h2>Activity inbox</h2><span className={'pill '+(data.worker?.online?'green':'amber')}>{data.worker?.online?'Worker online':'Worker offline or not started'}</span></div>
                     <p>Uploads need this tab until all files are stored. Validation and discovery then continue on the worker, including after a restart. This inbox updates every 10 seconds.</p>
                     {!data.jobs?.length && <p className="fine-print">Your first upload will start the activity history.</p>}
+                    {s.batches.some((batch: RecoveryBatch) => batch.status === 'uploading') && <p>Some uploads are unfinished. Use <strong>Resume import</strong> beside the batch in Source batches below, even if no job appears here yet.</p>}
                     {data.jobs?.map((job:any) => {
                       const result = job.result ? JSON.parse(job.result) : null;
                       return <div key={job.id} style={{borderTop:'1px solid var(--border)',padding:'16px 0'}}>
@@ -1347,6 +1387,7 @@ export default function Studio() {
                                   ? 'Validated'
                                   : b.status}
                               </span>
+                              <ImportRecovery batch={b} busy={!!busy} workerOnline={!!data.worker?.online} onResume={resumeImport} onActivity={showActivity} />
                             </TableCell>
                             <TableCell>
                               <Button
@@ -1770,13 +1811,15 @@ export default function Studio() {
             </SheetDescription>
           </SheetHeader>
           <div className="sheet-scroll">
+            {detailBatch && <ImportRecovery batch={detailBatch} busy={!!busy} workerOnline={!!data?.worker?.online} onResume={resumeImport} onActivity={showActivity} />}
+            {detailBatch?.status !== 'complete' && <p className="fine-print">File status updates every 10 seconds. This batch stays out of research until all nine files finish validation.</p>}
             {fileDetails.map((f) => (
               <div className="file-detail" key={f.kind}>
                 <div>
                   <h3>{titleCase(f.kind)}</h3>
                   <span className="fine-print">
                     {number(f.rows)} rows · {(f.bytes / 1048576).toFixed(2)} MB
-                    · {f.parsed ? 'Verified' : 'Pending'}
+                    · {f.parsed ? 'Verified' : detailBatch?.status === 'uploading' ? 'Upload not yet submitted' : f.rows > 0 ? 'Validation incomplete' : 'Awaiting validation'}
                   </span>
                   <p>{f.name}</p>
                 </div>

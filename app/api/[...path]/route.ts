@@ -1,5 +1,5 @@
 import { getUser, sameOrigin } from '@/lib/auth';
-import { queueImport, enqueueDiscovery, retryJob } from '@/lib/jobs';
+import { queueImport, enqueueDiscovery, retryJob, resumeImport } from '@/lib/jobs';
 import { originalStream } from '@/lib/process-import';
 import { all, first, run, runtime, bucket } from '@/lib/db';
 import {
@@ -232,6 +232,7 @@ async function handler(
         );
     }
     if (req.method === 'POST') {
+      if (area === 'imports' && id && action === 'resume') return json(await resumeImport(id));
       if (area === 'jobs' && action === 'retry') return json(await retryJob(id));
       if (area === 'imports' && !id)
         return json(await beginImport(await body()));

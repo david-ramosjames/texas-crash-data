@@ -1,4 +1,9 @@
 import { identify } from './csv';
+export function validateResumeSelection(files: File[], batch: string) {
+  if (files.length !== 9 || files.some(file => identify(file.name).id !== batch) ||
+      new Set(files.map(file => identify(file.name).kind)).size !== 9)
+    throw new Error('To resume this batch, select its same nine original CSV files. Use Cancel resume to import a different batch.');
+}
 export type UploadProgress = { batch:string; file:string; stage:string; rows:number; percent:number };
 export type APICall = (path:string,body?:unknown,raw?:Blob) => Promise<any>;
 export async function uploadFiles(files:File[],api:APICall,onProgress:(p:UploadProgress)=>void,signal?:AbortSignal) {

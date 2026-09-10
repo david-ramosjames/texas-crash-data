@@ -122,7 +122,9 @@ export async function summary() {
     `SELECT COUNT(*) crashes,MIN(c.date) start,MAX(c.date) "end",COALESCE(SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END),0) severe,COALESCE(SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END),0) fatal,COALESCE(SUM(cmv),0) cmv,COUNT(latitude) located,COALESCE(SUM(deaths),0) deaths ${BASE}`,
   );
   const batches = await all<any>(
-    'SELECT id,extraction,start,"end",status,created,activated,error FROM batches ORDER BY created DESC',
+    `SELECT b.id,b.extraction,b.start,b."end",b.status,b.created,b.activated,b.error,
+      j.status job_status,j.progress job_progress,j.error job_error
+      FROM batches b LEFT JOIN jobs j ON j.batch_id=b.id AND j.kind='import' ORDER BY b.created DESC`,
   );
   const cities = await all<{ city: string }>(
     `SELECT DISTINCT city ${BASE} ORDER BY city`,

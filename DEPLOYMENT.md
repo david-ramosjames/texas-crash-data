@@ -88,6 +88,7 @@ Official instructions: [OpenAI Developers plugin](https://developers.openai.com/
 
 ## Operations
 
+- Import recovery: use **Resume import** on an incomplete Source batch or in its **View files** panel. Fully stored originals are queued without another upload; failed jobs retain verified checkpoints when retried. An unfinished upload prompts for the same nine original CSV files, then **Resume selected batch**. Running/queued jobs are never restarted by this action. File details refresh every 10 seconds. The separate legacy `chatgpt.site` preview is not updated by this GitHub repository and its data is not automatically copied to Railway.
 - Failed jobs retry with backoff up to five attempts. Fix resource/configuration/data issues, then use **Retry job** in the private Activity inbox. Retrying does not discard verified row checkpoints or original objects.
 - A malformed batch remains inactive. Preserve it for audit and get corrected original files/newer extraction from TxDOT. There is deliberately no one-click destructive purge.
 - Check Supabase storage/database quotas and OpenAI spend regularly. Do not run automatic discovery without an intentional API spending limit.
