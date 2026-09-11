@@ -59,7 +59,8 @@ export async function retryJob(id: string) {
   return transaction(async () => {
     const job = await first<any>('SELECT * FROM jobs WHERE id=? FOR UPDATE',id);
     if (!job || job.status !== 'failed') throw new Error('Only failed jobs can be retried.');
-    await run("UPDATE jobs SET status='queued',attempts=0,error=NULL,available_at=now(),updated=now(),progress='Retry requested',finished=NULL WHERE id=?",id);
+    // Keep the last failure until success; retrying must not hide the diagnosis.
+    await run("UPDATE jobs SET status='queued',attempts=0,available_at=now(),updated=now(),progress='Retry requested',finished=NULL WHERE id=?",id);
     if (job.batch_id) await run("UPDATE batches SET status='queued',error=NULL WHERE id=?",job.batch_id);
     return { queued: true };
   });
@@ -71,10 +72,11 @@ export async function claimJob() {
       ORDER BY CASE WHEN status='running' THEN 0 WHEN kind='import' THEN 1 ELSE 2 END,created FOR UPDATE SKIP LOCKED LIMIT 1`);
     if (!job) return null;
     if (job.attempts >= 5) {
-      await failJob(job, 'The worker was interrupted repeatedly. Check worker resources and retry.', true);
+      await failJob(job, job.error || 'The worker was interrupted repeatedly. Check worker resources and retry.', true);
       return null;
     }
-    await run("UPDATE jobs SET status='running',attempts=attempts+1,updated=now(),progress='Starting or resuming',error=NULL WHERE id=?",job.id);
+    // Preserve error across automatic retries as well as explicit retries.
+    await run("UPDATE jobs SET status='running',attempts=attempts+1,updated=now(),progress='Starting or resuming' WHERE id=?",job.id);
     return { ...job, attempts:job.attempts+1 };
   });
 }

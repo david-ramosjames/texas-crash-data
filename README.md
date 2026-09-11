@@ -25,6 +25,14 @@ npm run worker
 2. In **Data library**, choose a folder or all original CSVs. Several complete extraction batches can be selected together. Unzip downloads first. Each batch must have all nine file types and retain its TxDOT filenames.
 3. Keep the tab open until file transfer finishes. Then close it if you want: the worker validates and activates each complete batch, then scans the available history. Re-select identical files to resume an interrupted transfer.
 4. Check the persistent **Activity inbox** for progress, failures, retries, and discovery results. The worker status detects missing/stopped workers. This is an in-app notification inbox, not an email delivery integration.
+
+### Diagnosing a failed discovery scan
+
+The inbox shows the job ID, attempt count, updated time, and current question/query stage. **Last failure** stays visible through automatic retries and manual **Retry job**; a successful job clears it. After five attempts the job needs an explicit retry. Deploying a new version does not reset exhausted attempts or re-import completed batches.
+
+The Railway **worker** logs `Research job failed.` with `jobId`, `kind`, `attempt`, `phase`, and a safe `code` before trying to save the error. If the database also rejects that write, the original failure code remains in the logs. Driver messages, SQL, credentials, and row contents are not logged. For example, `57014` means a query was cancelled or timed out; `25006` means read-only; `53100` means disk full; `53200` means database memory exhausted. Inspect the actual code and stage before changing resources or timeouts.
+
+This diagnostic update needs no migration or new environment variables. Deploy the updated code to **both** the web and worker services, refresh Data library, and use **Retry job** if the discovery job is failed. Imported data and verified checkpoints are preserved.
 5. Review **Discover** findings, or ask in **Research**. English questions produce an explicit filter plan for review before execution. AI cannot run arbitrary SQL. Unsupported filters are rejected rather than silently invented.
 6. Create a page, newsletter, or social draft. Edit, verify the evidence, and approve. Public exports require approval. Configure each publication's domain, brand, and byline. Download its static-site ZIP and deploy it on your chosen host; the studio does not change DNS or automatically publish.
 

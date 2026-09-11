@@ -117,15 +117,20 @@ export function compile(s: Spec) {
   const groupArgs = unitGroup ? (['make','color'] as const).filter(k=>s[k]).map(k=>s[k]) : [];
   return { sql, args: [...args, ...groupArgs, s.min, s.limit], where, filterArgs: args };
 }
-export async function summary() {
+export type QueryProgress = (stage: string) => Promise<void>;
+const noProgress: QueryProgress = async () => {};
+export async function summary(progress: QueryProgress = noProgress) {
+  await progress('Summary: counting loaded crashes');
   const stats = await first<any>(
     `SELECT COUNT(*) crashes,MIN(c.date) start,MAX(c.date) "end",COALESCE(SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END),0) severe,COALESCE(SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END),0) fatal,COALESCE(SUM(cmv),0) cmv,COUNT(latitude) located,COALESCE(SUM(deaths),0) deaths ${BASE}`,
   );
+  await progress('Summary: checking source coverage');
   const batches = await all<any>(
     `SELECT b.id,b.extraction,b.start,b."end",b.status,b.created,b.activated,b.error,
       j.status job_status,j.progress job_progress,j.error job_error
       FROM batches b LEFT JOIN jobs j ON j.batch_id=b.id AND j.kind='import' ORDER BY b.created DESC`,
   );
+  await progress('Summary: listing loaded cities');
   const cities = await all<{ city: string }>(
     `SELECT DISTINCT city ${BASE} ORDER BY city`,
   );
@@ -178,19 +183,22 @@ export function completeMonths(batches: { start: string; end: string }[]) {
   }
   return out;
 }
-export async function research(spec: Spec): Promise<Evidence> {
+export async function research(spec: Spec, progress: QueryProgress = noProgress): Promise<Evidence> {
   const q = compile(spec);
-  const [rows, totals, sources] = await Promise.all([
-    all<ResultRow>(q.sql, ...q.args),
-    first<any>(
+  // Workers bind research to one lock-owning client. Await each query so no
+  // queued query outlives a rejection or overlaps the next attempt/transaction.
+  await progress('Ranking groups');
+  const rows = await all<ResultRow>(q.sql, ...q.args);
+  await progress('Counting matching crashes');
+  const totals = await first<any>(
       `SELECT COUNT(*) total,COUNT(*) FILTER (WHERE c.severity IN (1,4)) severe,COUNT(*) FILTER (WHERE c.severity=4) fatal,COUNT(*) FILTER (WHERE c.latitude IS NULL) unlocated,COUNT(*) FILTER (WHERE c.intersection='') no_intersection ${BASE} ${q.where}`,
       ...q.filterArgs,
-    ),
-    all<any>(
+    );
+  await progress('Checking source batches');
+  const sources = await all<any>(
       `SELECT DISTINCT b.id,b.extraction,b.start,b."end" ${BASE} JOIN batches b ON b.id=c.batch_id ${q.where}`,
       ...q.filterArgs,
-    ),
-  ]);
+    );
   const warnings = [
     'Counts describe reported crashes, not the risk per trip or mile. Traffic exposure is not controlled.',
     'A recorded crash factor is not a legal finding of fault.',

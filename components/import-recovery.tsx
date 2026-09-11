@@ -17,7 +17,7 @@ export function ImportRecovery({ batch, busy, workerOnline, onResume, onActivity
         : failed ? 'Processing stopped. Saved files and verified row checkpoints are preserved.'
         : 'Upload unfinished. Resume checks stored files and asks you to select originals only if needed.'}
     </p>
-    {(batch.job_error || batch.error) && <p className="fine-print" role="status">{batch.job_error || batch.error}</p>}
+    {(batch.job_error || batch.error) && <p className="fine-print" role="status"><strong>Last failure:</strong> {batch.job_error || batch.error}</p>}
     <Button type="button" variant="outline" disabled={busy}
       aria-label={`${active ? 'View activity' : 'Resume import'} for ${batch.start} to ${batch.end}`}
       onClick={() => active ? onActivity() : onResume(batch)}>

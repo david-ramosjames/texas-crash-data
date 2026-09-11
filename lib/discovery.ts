@@ -1,9 +1,11 @@
 import { all, run, runtime } from './db';
 import { aiPropose } from './ai';
-import { research, summary } from './research';
+import { research, summary, type QueryProgress } from './research';
+import { requestFailure } from './errors';
 import { Evidence, Spec, COHORTS, number, titleCase } from './contracts';
-export async function discover() {
-  const s = await summary();
+export async function discover(progress: QueryProgress = async () => {}) {
+  const scanResearch = (spec: Spec, label: string) => research(spec, stage => progress(`${label} · ${stage}`));
+  const s = await summary(progress);
   if (!s.crashes)
     throw new Error('Import a complete TxDOT batch before scanning.');
   const probes: {
@@ -52,7 +54,7 @@ export async function discover() {
     });
   // A statewide volume ranking can bury useful local stories. Probe the six
   // largest loaded city cohorts as well; only save results that qualify.
-  const cityEvidence = await research({
+  const cityEvidence = await scanResearch({
     cohort: 'all',
     group: 'city',
     metric: 'crashes',
@@ -60,7 +62,7 @@ export async function discover() {
     end: s.end,
     min: 30,
     limit: 8,
-  });
+  }, 'Selecting city cohorts');
   for (const city of cityEvidence.rows
     .filter((r) => !/^Unknown|^Not recorded/i.test(r.label))
     .slice(0, 6)
@@ -90,7 +92,8 @@ export async function discover() {
   let created = 0,
     refreshed = 0;
   const now = new Date().toISOString();
-  for (const p of probes) {
+  for (const [index, p] of probes.entries()) {
+    const phase = `Question ${index + 1}/${probes.length}: ${p.cohort} by ${p.group}`;
     const spec: Spec = {
       ...p,
       start: s.start,
@@ -98,7 +101,7 @@ export async function discover() {
       min: p.group === 'intersection' ? 3 : 10,
       limit: 10,
     };
-    const e = await research(spec);
+    const e = await scanResearch(spec, phase);
     const r = e.rows.find(
       (x) =>
         !/^Unknown|^Not recorded/i.test(x.label) &&
@@ -135,6 +138,7 @@ export async function discover() {
           (['weather','light','make','body'].includes(p.group) ? 20 : 0),
       ),
     );
+    await progress(`${phase} · Saving finding`);
     const old = await all<any>(
       'SELECT evidence,status FROM findings WHERE id=?',
       id,
@@ -181,12 +185,12 @@ export async function discover() {
         min: 20,
         limit: 100,
       };
-      const current = await research(spec),
-        previous = await research({
+      const current = await scanResearch(spec, `Comparison: ${cohort}, current month`),
+        previous = await scanResearch({
           ...spec,
           start: before + '-01',
           end: endOf(before),
-        });
+        }, `Comparison: ${cohort}, previous period`);
       const candidates = current.rows
         .map((r) => ({
           r,
@@ -235,6 +239,7 @@ export async function discover() {
         };
         const title = `${titleCase(r.label)}: ${cohort === 'all' ? 'crashes' : cohort + '-involved crashes'} ${delta > 0 ? 'up' : 'down'} ${pc}% between ${before} and ${latest}`;
         const description = `${number(old!.crashes)} matching crashes in ${before}; ${number(r.crashes)} in ${latest} (${delta > 0 ? '+' : ''}${number(delta)}). Both calendar intervals are covered by supplied extracts. ${e.comparison!.caveat}`;
+        await progress(`Comparison: ${cohort} · Saving finding`);
         const prior = await all<any>(
           'SELECT evidence,status FROM findings WHERE id=?',
           id,
@@ -263,6 +268,7 @@ export async function discover() {
     aiError: string | undefined;
   if (runtime().OPENAI_API_KEY && runtime().OPENAI_MODEL) {
     try {
+      await progress('AI assistance: proposing research questions');
       const ideas = await aiPropose({
         start: s.start,
         end: s.end,
@@ -273,8 +279,9 @@ export async function discover() {
           )
         ).map((x) => x.title),
       });
-      for (const idea of ideas) {
-        const e = await research(idea.spec);
+      for (const [index, idea] of ideas.entries()) {
+        const label = `AI question ${index + 1}/${ideas.length}: ${idea.spec.cohort} by ${idea.spec.group}`;
+        const e = await scanResearch(idea.spec, label);
         if (e.total < 20 || !e.rows.length) continue;
         const key = Array.from(
           new Uint8Array(
@@ -288,6 +295,7 @@ export async function discover() {
           .map((x) => x.toString(16).padStart(2, '0'))
           .join('');
         const id = 'ai-' + key;
+        await progress(`${label} · Saving finding`);
         const prior = await all<any>(
           'SELECT evidence FROM findings WHERE id=?',
           id,
@@ -307,12 +315,10 @@ export async function discover() {
         aiIdeas++;
       }
     } catch (error) {
-      aiError =
-        error instanceof Error
-          ? error.message
-          : 'AI proposals unavailable. The automated evidence scan completed.';
+      aiError = requestFailure(error).error;
     }
   }
+  await progress('Discovery questions finished; preparing results');
   return {
     created,
     refreshed,

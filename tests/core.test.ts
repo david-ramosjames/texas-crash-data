@@ -103,7 +103,14 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     await run('UPDATE files SET parsed=1 WHERE batch_id=?',conflict.id);await assert.rejects(()=>activate(conflict.id),/Conflicting/);
   });
   await t.test('discovery preserves human editorial decisions and produces backed findings',async()=>{
-    const result=await discover();assert(result.created>0);assert.equal(result.comparisons,0);
+    const phases:string[]=[];
+    const result=await discover(async phase=>{phases.push(phase);});assert(result.created>0);assert.equal(result.comparisons,0);
+    assert.equal(phases[0],'Summary: counting loaded crashes');
+    assert(phases.includes('Selecting city cohorts · Ranking groups'));
+    assert(phases.some(p=>/^Question 1\/\d+: all by city · Ranking groups$/.test(p)));
+    assert(phases.some(p=>/^Question 1\/\d+: all by city · Saving finding$/.test(p)));
+    assert(phases.includes('Question 2/27: all by intersection · Counting matching crashes'));
+    assert.equal(phases.at(-1),'Discovery questions finished; preparing results');
     const f=await first<any>('SELECT * FROM findings LIMIT 1');
     await run("UPDATE findings SET status='dismissed' WHERE id=?",f.id);
     await discover();assert.equal((await first<any>('SELECT status FROM findings WHERE id=?',f.id)).status,'dismissed');
@@ -112,9 +119,19 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     const j=await enqueueDiscovery();assert.equal((await enqueueDiscovery()).id,j.id);
     const claimed=await claimJob();assert.equal(claimed.id,j.id);
     const restarted=await claimJob();assert.equal(restarted.id,j.id);assert.equal(restarted.attempts,2);
-    await failJob({...restarted,attempts:5},'test failure');
+    const diagnostic='At Question 2: intersection. [code: 57014] The database query was cancelled or timed out.';
+    await failJob(restarted,diagnostic);
+    await run('UPDATE jobs SET available_at=now() WHERE id=?',j.id);
+    const autoRetry=await claimJob();assert.equal(autoRetry.attempts,3);assert.equal(autoRetry.error,diagnostic);
+    assert.equal((await first<any>('SELECT error FROM jobs WHERE id=?',j.id)).error,diagnostic);
+    await failJob({...autoRetry,attempts:5},diagnostic);
     assert.equal((await first<any>('SELECT status FROM jobs WHERE id=?',j.id)).status,'failed');
-    await retryJob(j.id);assert.equal((await claimJob()).attempts,1);
+    await retryJob(j.id);
+    const manualRetry=await claimJob();assert.equal(manualRetry.attempts,1);assert.equal(manualRetry.error,diagnostic);
+    await run('UPDATE jobs SET attempts=5 WHERE id=?',j.id);
+    assert.equal(await claimJob(),null);
+    const terminal=await first<any>('SELECT status,error FROM jobs WHERE id=?',j.id);
+    assert.equal(terminal.status,'failed');assert.equal(terminal.error,diagnostic);
   });
  }); } finally { await pg.close(); }
 });

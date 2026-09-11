@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { requestFailure } from '../lib/errors';
 
 test('database codes provide useful hints without leaking driver details', () => {
-  for (const code of ['42P01', '42703', '28P01', '23505', '42501', 'XX000']) {
+  for (const code of ['42P01', '42703', '28P01', '23505', '42501', 'XX000', '57014', '25006', '53100', '53200']) {
     const result = requestFailure(Object.assign(new Error('password=private-value SELECT secret FROM customer'), {
       code, detail: 'private-row', query: 'private-query', connectionString: 'postgres://private',
     }));
