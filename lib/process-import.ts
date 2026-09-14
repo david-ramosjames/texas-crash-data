@@ -21,7 +21,7 @@ export async function originalStream(batch: string, kind: string) {
   });
 }
 export async function processImport(batch: string, progress: (text: string) => Promise<void>) {
-  const state = await first<any>('SELECT status FROM batches WHERE id=?',batch);
+  const state = await first<any>('SELECT status,time_parser_version FROM batches WHERE id=?',batch);
   if (state?.status === 'complete') return { duplicate: true };
   await run("UPDATE batches SET status='processing',error=NULL WHERE id=?",batch);
   const map: Lookup = new Map();
@@ -41,10 +41,16 @@ export async function processImport(batch: string, progress: (text: string) => P
       await progress(`Indexing ${kind} · ${count.toLocaleString('en-US')} rows verified`);
     };
     for await (const row of readCSV({ stream: () => stream })) {
-      rows.push(normalize(row,kind,map));
+      rows.push(normalize(row,kind,map,state.time_parser_version<2));
       if (rows.length === 500) await send();
     }
     await send(); await finishFile(batch,kind,{rows:count});
+  }
+  if(state.time_parser_version<2) {
+    // Preserve legacy row-chunk hashes while resuming, then correct staged
+    // hours before comparing this snapshot with already-repaired revisions.
+    const {repairTimes}=await import('./time-repair');
+    await repairTimes(progress,batch);
   }
   await progress('Checking revisions and activating all nine files');
   return activate(batch);

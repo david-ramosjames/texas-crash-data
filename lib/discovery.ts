@@ -1,7 +1,7 @@
-import { all, run, runtime } from "./db";
-import { aiPropose } from "./ai";
+import { all, run } from "./db";
+import { enqueueProposals } from "./ideas";
+import { usableLocation, comparisonRow } from "./research-quality";
 import { research, summary, type QueryProgress } from "./research";
-import { requestFailure } from "./errors";
 import { Evidence, Spec, COHORTS, number, titleCase } from "./contracts";
 import { discoveryCheckpoints } from "./discovery-checkpoints";
 type FindingOutcome = { created: number; refreshed: number };
@@ -69,7 +69,7 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
     "Selecting city cohorts",
   );
   for (const city of cityEvidence.rows
-    .filter((r) => !/^Unknown|^Not recorded/i.test(r.label))
+    .filter((r) => usableLocation(r.label))
     .slice(0, 6)
     .map((r) => r.label)) {
     probes.push({
@@ -118,7 +118,7 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
     const e = await scanResearch(spec, phase);
     const r = e.rows.find(
       (x) =>
-        !/^Unknown|^Not recorded/i.test(x.label) &&
+        usableLocation(x.label) &&
         (p.metric === "severe" ? x.severe >= 3 : x.crashes >= 10),
     );
     if (!r) {
@@ -226,7 +226,7 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
             x.old.crashes >= 20 &&
             Math.abs(x.r.crashes - x.old.crashes) >= 10 &&
             Math.abs(x.r.crashes / x.old.crashes - 1) >= 0.25 &&
-            !/^Unknown|^Not recorded/i.test(x.r.label),
+            usableLocation(x.r.label),
         )
         .sort(
           (a, b) => Math.abs(b.r.crashes - b.old!.crashes) - Math.abs(a.r.crashes - a.old!.crashes),
@@ -239,6 +239,8 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
         const e: Evidence = {
           ...current,
           comparison: {
+            focusLabel: r.label,
+            kind: before === priorYear ? 'Year over year' : 'Month over month',
             start: previous.spec.start,
             end: previous.spec.end,
             rows: previous.rows,
@@ -289,91 +291,8 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
       }
     }
   }
-  let aiIdeas = 0,
-    aiError: string | undefined;
-  if (runtime().OPENAI_API_KEY && runtime().OPENAI_MODEL) {
-    await progress("AI assistance: proposing research questions");
-    const plan = await checkpoints.query(
-      "ai-plan",
-      { model: runtime().OPENAI_MODEL },
-      "AI assistance",
-      progress,
-      async () => {
-        const existing = await all<any>("SELECT title FROM findings ORDER BY score DESC LIMIT 35");
-        try {
-          return {
-            ideas: await aiPropose({
-              start: s.start,
-              end: s.end,
-              cities: s.cities,
-              existingQuestions: existing.map((x) => x.title),
-            }),
-            error: undefined as string | undefined,
-          };
-        } catch (error) {
-          // Only proposal-service failure is optional. SQL and checkpoint errors
-          // remain outside this catch so unfinished questions fail the job.
-          return {
-            ideas: [] as Awaited<ReturnType<typeof aiPropose>>,
-            error: requestFailure(error).error,
-          };
-        }
-      },
-    );
-    const ideas = plan.ideas;
-    aiError = plan.error;
-    for (const [index, idea] of ideas.entries()) {
-      const label = `AI question ${index + 1}/${ideas.length}: ${idea.spec.cohort} by ${idea.spec.group}`;
-      const completed = await checkpoints.read<FindingOutcome & { qualified: boolean }>(
-        "ai-finding",
-        idea,
-      );
-      if (completed) {
-        created += completed.created;
-        refreshed += completed.refreshed;
-        if (completed.qualified) aiIdeas++;
-        await progress(`${label} · Already complete; resuming next question`);
-        continue;
-      }
-      const e = await scanResearch(idea.spec, label);
-      if (e.total < 20 || !e.rows.length) {
-        await checkpoints.commit("ai-finding", idea, async () => ({
-          created: 0,
-          refreshed: 0,
-          qualified: false,
-        }));
-        continue;
-      }
-      const key = Array.from(
-        new Uint8Array(
-          await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(e.spec))),
-        ),
-      )
-        .slice(0, 12)
-        .map((x) => x.toString(16).padStart(2, "0"))
-        .join("");
-      const id = "ai-" + key;
-      await progress(`${label} · Saving finding`);
-      const outcome = await checkpoints.commit("ai-finding", idea, async () => {
-        const prior = await all<any>("SELECT evidence FROM findings WHERE id=?", id);
-        const lead = e.rows[0];
-        await run(
-          "INSERT INTO findings(id,signature,title,category,summary,score,status,evidence,created,updated) VALUES(?,?,?,'AI research angle',?,75,'new',?,?,?) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,updated=excluded.updated",
-          id,
-          id,
-          idea.question,
-          `Verified result: ${number(e.total)} matching crashes. ${titleCase(lead.label)} ranks first with ${number(lead[e.spec.metric])} ${e.spec.metric === "severe" ? "fatal or serious-injury crashes" : e.spec.metric === "fatal" ? "fatal crashes" : "crashes"}. Review this AI-proposed question against the exact filters and evidence.`,
-          JSON.stringify(e),
-          now,
-          now,
-        );
-        return { created: prior.length ? 0 : 1, refreshed: prior.length ? 1 : 0, qualified: true };
-      });
-      created += outcome.created;
-      refreshed += outcome.refreshed;
-      aiIdeas++;
-    }
-  }
+  const aiIdeas = 0, aiError = undefined;
+  await enqueueProposals();
   await checkpoints.assertCurrent();
   await progress("Discovery questions finished; preparing results");
   return {
@@ -389,7 +308,8 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
   };
 }
 export function draftBody(e: Evidence, title: string, channel: string) {
-  const lead = e.rows[0];
+  const displayRows=e.comparison?.focusLabel?e.rows.filter(r=>r.label===e.comparison!.focusLabel):e.rows;
+  const lead = displayRows[0];
   const metrics =
     e.spec.metric === "severe"
       ? "fatal or serious-injury crashes"
@@ -398,7 +318,7 @@ export function draftBody(e: Evidence, title: string, channel: string) {
         : "reported crashes";
   const where = e.spec.city ? ` in ${titleCase(e.spec.city)}` : " in Texas";
   const intro = `The supplied Texas Department of Transportation public crash extract records ${number(e.total)} matching crashes${where} from ${e.spec.start} through ${e.spec.end}. This analysis groups ${COHORTS[e.spec.cohort].toLowerCase()} by ${e.spec.group} and ranks them by ${metrics}.`;
-  let findings = e.rows
+  let findings = displayRows
     .slice(0, channel === "social" ? 3 : 10)
     .map(
       (r, i) =>
@@ -408,10 +328,10 @@ export function draftBody(e: Evidence, title: string, channel: string) {
   if (e.comparison)
     findings +=
       `\n\nCOMPARISON: ${e.comparison.start} through ${e.comparison.end}\n${e.comparison.caveat}\n` +
-      e.rows
+      displayRows
         .slice(0, 10)
         .map((r) => {
-          const old = e.comparison!.rows.find((p) => p.label === r.label);
+          const old = comparisonRow(e,r.label);
           return old
             ? `${titleCase(r.label)}: ${old.crashes} previously; ${r.crashes} currently.`
             : "";

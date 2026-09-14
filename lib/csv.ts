@@ -1,5 +1,6 @@
 // Incremental RFC 4180 parser; identifiers remain text, including leading zeros.
 export class CSVParser {
+  constructor(private delimiter = ',') {}
   private cell = '';
   private row: string[] = [];
   private quoted = false;
@@ -19,7 +20,7 @@ export class CSVParser {
           continue;
         }
         this.quoted = false;
-        if (ch !== ',' && ch !== '\r' && ch !== '\n')
+        if (ch !== this.delimiter && ch !== '\r' && ch !== '\n')
           throw new Error('Unexpected character after closing CSV quote.');
       }
       if (this.quoted) {
@@ -30,7 +31,7 @@ export class CSVParser {
       if (ch === '"') {
         if (this.cell) throw new Error('Unexpected quote in CSV field.');
         this.quoted = true;
-      } else if (ch === ',') {
+      } else if (ch === this.delimiter) {
         this.row.push(this.cell);
         this.cell = '';
       } else if (ch === '\r' || ch === '\n') {
@@ -111,6 +112,22 @@ export function identify(name: string) {
   };
 }
 export type Lookup = Map<string, string>;
+export function parseCrashHour(value: string): number | null {
+  const s=value.trim().toUpperCase();
+  if(!s || /^(UNKNOWN|NOT REPORTED|NOT RECORDED|99:99|9999)$/.test(s)) return null;
+  const m=s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/);
+  if(m) {
+    let h=Number(m[1]);
+    if(Number(m[2])>59 || Number(m[3] || 0)>59 || (m[4] ? h<1 || h>12 : h>23)) throw new Error('Invalid Crash_Time format; original preserved.');
+    if(m[4]) h=h%12+(m[4]==='PM'?12:0);
+    return h;
+  }
+  if(/^\d{3,4}$/.test(s)) {
+    const h=Number(s.slice(0,-2)), minutes=Number(s.slice(-2));
+    if(h<24 && minutes<60) return h;
+  }
+  throw new Error('Invalid Crash_Time format; original preserved.');
+}
 export function decode(map: Lookup, column: string, value: string) {
   return (
     map.get(`${column}|${value}`) ||
@@ -121,6 +138,7 @@ export function normalize(
   row: Record<string, string>,
   kind: string,
   map: Lookup,
+  legacyTime = false,
 ) {
   const n = (key: string) =>
     row[key]?.trim() !== '' && Number.isFinite(Number(row[key]))
@@ -184,7 +202,7 @@ export function normalize(
     return {
       id: text('Crash_ID'),
       date,
-      hour: time && hour >= 0 && hour < 24 ? hour : null,
+      hour: legacyTime ? (time && hour >= 0 && hour < 24 ? hour : null) : parseCrashHour(time),
       city: d('CITY_ID', 'City_ID'),
       county: d('CNTY_ID', 'Cnty_ID'),
       road: road.toUpperCase(),

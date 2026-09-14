@@ -1,6 +1,7 @@
 import { all, first } from './db';
 import { buildSummary, cachedSummary, emptySummary } from './summary-cache';
 import { COHORTS, GROUPS, Spec, Evidence, ResultRow } from './contracts';
+import { usesHours, TIME_VERSION } from './research-quality';
 
 export const BASE =
   'FROM current_crashes cc JOIN crashes c ON c.id=cc.id AND c.batch_id=cc.batch_id';
@@ -56,12 +57,24 @@ export function validateSpec(input: unknown): Spec {
     min,
     limit,
   } as Spec;
-  for (const key of ['city', 'county', 'make', 'color'] as const) {
+  if(s.compare) {
+    if(!['year_over_year','previous_period'].includes(String(s.compare)))throw new Error('Unsupported comparison.');
+    result.compare=s.compare as Spec['compare'];
+    if(group==='month' && result.compare==='previous_period')throw new Error('For monthly groups, use year-over-year comparison. Equal-day previous periods can split calendar months; choose another grouping for that comparison.');
+  }
+  for (const key of ['city', 'county', 'make', 'color','road','weather','light','model','factor','rural'] as const) {
     if (s[key] !== undefined && s[key] !== null && s[key] !== '') {
       if (typeof s[key] !== 'string' || (s[key] as string).length > 100)
         throw new Error('Invalid text filter.');
       result[key] = (s[key] as string).trim();
     }
+  }
+  for(const [lo,hi,minValue,maxValue] of [['hourFrom','hourThrough',0,23],['speedMin','speedMax',0,150],['yearMin','yearMax',1900,2100]] as const) {
+    for(const key of [lo,hi]) if(s[key]!==undefined && s[key]!==null && s[key]!=='') {
+      const v=Number(s[key]);if(!Number.isInteger(v)||v<minValue||v>maxValue)throw new Error(`Invalid ${key}.`);
+      result[key]=v;
+    }
+    if(result[lo]!==undefined && result[hi]!==undefined && result[lo]!>result[hi]!)throw new Error(`${lo} must not exceed ${hi}. Use separate queries for overnight hours.`);
   }
   const spatial = ['latitude','longitude','radiusMeters'] as const;
   if (spatial.some(k => s[k] !== undefined && s[k] !== null && s[k] !== '')) {
@@ -74,19 +87,23 @@ export function validateSpec(input: unknown): Spec {
 export function compile(s: Spec) {
   const clauses = ['c.date>=?', 'c.date<=?'];
   const args: unknown[] = [s.start, s.end];
-  for (const field of ['city', 'county'] as const) {
+  for (const field of ['city', 'county','road','weather','light','rural'] as const) {
     if (s[field]) {
       clauses.push(`UPPER(c.${field})=UPPER(?)`);
       args.push(s[field]);
     }
   }
+  for(const [key,column,op] of [['hourFrom','hour','>='],['hourThrough','hour','<='],['speedMin','speed','>='],['speedMax','speed','<=']] as const) if(s[key]!==undefined){clauses.push(`c.${column}${op}?`);args.push(s[key]);}
   if (s.cohort === 'cmv') clauses.push('c.cmv=1');
   const unitClauses: string[] = UNIT_FILTERS[s.cohort] ? [UNIT_FILTERS[s.cohort]] : [];
-  for (const field of ['make', 'color'] as const)
+  const unitArgs:unknown[]=[];
+  for (const field of ['make', 'color','model','factor'] as const)
     if (s[field]) {
       unitClauses.push(`UPPER(u.${field})=UPPER(?)`);
       args.push(s[field]);
+      unitArgs.push(s[field]);
     }
+  for(const [key,op] of [['yearMin','>='],['yearMax','<=']] as const) if(s[key]!==undefined){unitClauses.push(`u.year${op}?`);args.push(s[key]);unitArgs.push(s[key]);}
   if(unitClauses.length) clauses.push(`EXISTS (SELECT 1 FROM units u WHERE u.batch_id=c.batch_id AND u.crash_id=c.id AND ${unitClauses.join(' AND ')})`);
   if(s.radiusMeters !== undefined) {
     clauses.push('ST_DWithin(c.location,ST_SetSRID(ST_MakePoint(?::double precision,?::double precision),4326)::geography,?::double precision)');
@@ -117,7 +134,7 @@ export function compile(s: Spec) {
   const extra = s.group === 'intersection' ? " AND c.intersection<>''" : '';
   const where = `WHERE ${clauses.join(' AND ')}`;
   const sql = `WITH matched AS (SELECT DISTINCT c.id,c.batch_id,c.severity,c.deaths,c.serious,${dimensions[s.group]} AS label ${BASE}${join} ${where}${extra}${cohortUnits}) SELECT label,COUNT(*) AS crashes,SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END) AS severe,SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END) AS fatal,SUM(deaths) AS deaths,SUM(serious) AS serious FROM matched GROUP BY label HAVING COUNT(*)>=? ORDER BY ${s.metric} DESC,crashes DESC,label LIMIT ?`;
-  const groupArgs = unitGroup ? (['make','color'] as const).filter(k=>s[k]).map(k=>s[k]) : [];
+  const groupArgs = unitGroup ? unitArgs : [];
   return { sql, args: [...args, ...groupArgs, s.min, s.limit], where, filterArgs: args };
 }
 export type QueryProgress = (stage: string) => Promise<void>;
@@ -183,6 +200,20 @@ export function completeMonths(batches: { start: string; end: string }[]) {
   return out;
 }
 export async function research(spec: Spec, progress: QueryProgress = noProgress, stage: ResearchStage = runStage): Promise<Evidence> {
+  if(spec.compare) {
+    const {compare,...currentSpec}=spec;
+    const shiftYear=(s:string)=>{const [y,m,d]=s.split('-').map(Number);return `${y-1}-${String(m).padStart(2,'0')}-${String(Math.min(d,new Date(Date.UTC(y-1,m,0)).getUTCDate())).padStart(2,'0')}`;};
+    const span=Date.parse(spec.end)-Date.parse(spec.start)+86400000;
+    const shift=(s:string)=>new Date(Date.parse(s)-span).toISOString().slice(0,10);
+    const priorSpec={...currentSpec,start:compare==='year_over_year'?shiftYear(spec.start):shift(spec.start),end:compare==='year_over_year'?shiftYear(spec.end):shift(spec.end)};
+    const coverage=await all<{id:string;extraction:string;start:string;end:string}>('SELECT id,extraction,start,"end" FROM batches WHERE status=\'complete\'');
+    if(!covers(spec.start,spec.end,coverage)||!covers(priorSpec.start,priorSpec.end,coverage))throw new Error('Both comparison periods must be covered by loaded source batches. Choose matching available dates.');
+    const current=await research(currentSpec,progress,stage);
+    const previous=await research(priorSpec,p=>progress(`Previous period · ${p}`),(key,task)=>stage(`previous-${key}`,task));
+    return {...current,spec,warnings:[...new Set([...current.warnings,...previous.warnings])].filter(w=>!w.startsWith('This extract does not cover every day')),comparison:{kind:compare==='year_over_year'?'Year over year':'Previous period',start:priorSpec.start,end:priorSpec.end,rows:previous.rows,total:previous.total,caveat:'Counts are not exposure-adjusted. Reporting lag, amendments and changes in travel can affect comparisons. Rankings contain only qualifying displayed groups; an absent group is not zero.'},sources:coverage.filter(b=>(b.start<=spec.end && b.end>=spec.start)||(b.start<=priorSpec.end && b.end>=priorSpec.start))};
+  }
+  if(usesHours(spec) && await first("SELECT id FROM batches WHERE status='complete' AND time_parser_version<2 LIMIT 1"))
+    throw new Error('AM/PM correction is required before hour-based research. Check the Data library repair job.');
   const q = compile(spec);
   // Workers bind research to one lock-owning client. Await each query so no
   // queued query outlives a rejection or overlaps the next attempt/transaction.
@@ -202,6 +233,8 @@ export async function research(spec: Spec, progress: QueryProgress = noProgress,
     'Counts describe reported crashes, not the risk per trip or mile. Traffic exposure is not controlled.',
     'A recorded crash factor is not a legal finding of fault.',
   ];
+  if(spec.factor) warnings.push('Contributing factor filter uses the first recorded unit factor only, not every factor or a finding of fault.');
+  if(spec.speedMin!==undefined || spec.speedMax!==undefined) warnings.push('Speed filter means posted speed limit, not vehicle travel speed.');
   if (!covers(spec.start, spec.end, sources))
     warnings.unshift(
       'This extract does not cover every day in the selected period. No full-period trend claim is supported.',
@@ -232,6 +265,7 @@ export async function research(spec: Spec, progress: QueryProgress = noProgress,
   );
   return {
     spec,
+    timeVersion: TIME_VERSION,
     rows: rows.map((x) => ({
       ...x,
       share: totals.total ? x.crashes / totals.total : 0,

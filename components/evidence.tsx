@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Evidence, number, titleCase, COHORTS, GROUPS } from '@/lib/contracts';
+import { needsTimeRefresh, usableLocation, comparisonRow } from '@/lib/research-quality';
 import {
   AlertTriangle,
   ChartNoAxesCombined,
@@ -30,8 +31,12 @@ export function download(
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function Bars({ e, small = false }: { e: Evidence; small?: boolean }) {
-  const rows = e.rows.slice(0, small ? 4 : 12);
+export function Bars({ e, small = false, focusLabel }: { e: Evidence; small?: boolean; focusLabel?: string }) {
+  if(needsTimeRefresh(e)) return <p role="alert">Hour-based evidence needs regeneration after AM/PM correction.</p>;
+  const named=small && ['city','county','road','intersection'].includes(e.spec.group)?e.rows.filter(r=>usableLocation(r.label)):e.rows;
+  const focus=named.find(r=>r.label.toLowerCase()===(e.comparison?.focusLabel||focusLabel||'').toLowerCase());
+  const rows = (small && e.comparison && focus?[focus]:named).slice(0, small ? 4 : 12);
+  if(small && e.comparison) return <div><p className="fine-print">Previous → current ({e.spec.metric})</p>{rows.map(r=>{const p=comparisonRow(e,r.label);const delta=p?r[e.spec.metric]-p[e.spec.metric]:null;return <p key={r.label}><strong>{titleCase(r.label)}</strong><br/>{p?number(p[e.spec.metric]):'Not in prior ranking'} → {number(r[e.spec.metric])}{delta!==null&&` (${delta>=0?'+':''}${number(delta)}${p&&p[e.spec.metric]>0?`, ${(100*delta/p[e.spec.metric]).toFixed(1)}%`:''})`}</p>;})}</div>;
   const max = Math.max(1, ...rows.map((r) => r[e.spec.metric]));
   return (
     <div
@@ -59,6 +64,7 @@ export function Bars({ e, small = false }: { e: Evidence; small?: boolean }) {
 export function EvidencePanel({ e }: { e: Evidence }) {
   return (
     <div className="evidence">
+      {needsTimeRefresh(e)&&<p role="alert">Do not publish these hour results. The old parser ignored AM/PM; regenerate this research after the repair job completes.</p>}
       <div className="evidence-context">
         <span className="pill blue">{COHORTS[e.spec.cohort]}</span>
         <span className="pill">
@@ -89,7 +95,7 @@ export function EvidencePanel({ e }: { e: Evidence }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>City</TableHead>
+                <TableHead>{GROUPS[e.spec.group]}</TableHead>
                 <TableHead>Previous</TableHead>
                 <TableHead>Current</TableHead>
                 <TableHead>Change</TableHead>
@@ -98,20 +104,18 @@ export function EvidencePanel({ e }: { e: Evidence }) {
             <TableBody>
               {e.rows
                 .filter((r) =>
-                  e.comparison!.rows.some((p) => p.label === r.label),
+                  !!comparisonRow(e,r.label),
                 )
                 .slice(0, 15)
                 .map((r) => {
-                  const p = e.comparison!.rows.find(
-                    (x) => x.label === r.label,
-                  )!;
+                  const p = comparisonRow(e,r.label)!;
                   return (
                     <TableRow key={r.label}>
                       <TableCell>{titleCase(r.label)}</TableCell>
-                      <TableCell>{p.crashes}</TableCell>
-                      <TableCell>{r.crashes}</TableCell>
+                      <TableCell>{p[e.spec.metric]}</TableCell>
+                      <TableCell>{r[e.spec.metric]}</TableCell>
                       <TableCell>
-                        {((r.crashes / p.crashes - 1) * 100).toFixed(1)}%
+                        {p[e.spec.metric] ? `${((r[e.spec.metric] / p[e.spec.metric] - 1) * 100).toFixed(1)}%` : 'No percentage baseline'}
                       </TableCell>
                     </TableRow>
                   );

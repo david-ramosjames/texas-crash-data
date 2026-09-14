@@ -24,6 +24,10 @@ import { zip } from '@/lib/zip';
 import { aiInterpret, aiWrite } from '@/lib/ai';
 import { requestFailure } from '@/lib/errors';
 import { activity } from '@/lib/activity';
+import { approveIdea, enqueueProposals, saveIdea } from '@/lib/ideas';
+import { needsTimeRefresh } from '@/lib/research-quality';
+import { importPlanner } from '@/lib/keyword-planner';
+const assertFreshTime = (e:any) => { if(needsTimeRefresh(e)) throw new Error('This hour-based evidence predates the AM/PM correction. Run fresh research before drafting or exporting.'); };
 export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
   Response.json(body, {
@@ -80,6 +84,7 @@ async function handler(
             id,
           )
         ).map((d) => ({ ...d, evidence: JSON.parse(d.evidence) }));
+        drafts.forEach(d=>assertFreshTime(d.evidence));
         if (!drafts.length)
           throw new Error(
             'Approve at least one page for this publication first.',
@@ -129,6 +134,7 @@ async function handler(
             'Approve this draft before exporting publication content.',
           );
         draft.evidence = JSON.parse(draft.evidence);
+        assertFreshTime(draft.evidence);
         const domain = draft.domain_id
           ? await first<any>(
               'SELECT * FROM domains WHERE id=?',
@@ -188,6 +194,8 @@ async function handler(
           })),
           domains,
           settings: Object.fromEntries(settings.map((x) => [x.key, x.value])),
+          ideas: (await all<any>('SELECT i.*,j.status job_status,j.error job_error FROM research_ideas i LEFT JOIN jobs j ON j.id=i.job_id ORDER BY i.created DESC')).map(i=>({...i,spec:JSON.parse(i.spec)})),
+          timeRepairNeeded: !!await first("SELECT id FROM batches WHERE status='complete' AND time_parser_version<2 LIMIT 1"),
           ai: {
             connected: !!runtime().OPENAI_API_KEY && !!runtime().OPENAI_MODEL,
             model: runtime().OPENAI_MODEL || null,
@@ -236,6 +244,16 @@ async function handler(
         );
     }
     if (req.method === 'POST') {
+      if(area==='ideas' && id==='keyword-planner'){const input=await body();return json(await importPlanner(input.text,input.context));}
+      if(area==='ideas' && id==='propose') return json(await enqueueProposals());
+      if(area==='ideas' && action==='approve') return json(await approveIdea(id,await body()));
+      if(area==='ideas' && !id) {
+        const input=await body();await saveIdea(input.question,input.spec,'Your question','Added for approval before research.');return json({saved:true});
+      }
+      if(area==='ideas' && action==='status') {
+        const {status}=await body();if(!['suggested','dismissed'].includes(status))throw new Error('Invalid idea status.');
+        await run("UPDATE research_ideas SET status=?,updated=now() WHERE id=? AND status IN ('suggested','dismissed')",status,id);return json({saved:true});
+      }
       if (area === 'imports' && id && action === 'resume') return json(await resumeImport(id));
       if (area === 'jobs' && action === 'retry') return json(await retryJob(id));
       if (area === 'imports' && !id)
@@ -268,6 +286,7 @@ async function handler(
       if (area === 'ai-write') {
         const d = await first<any>('SELECT * FROM drafts WHERE id=?', id);
         if (!d) throw new Error('Draft not found.');
+        assertFreshTime(JSON.parse(d.evidence));
         const text = await aiWrite(JSON.parse(d.evidence), d.channel, d.title);
         return json({
           body: text,
@@ -292,6 +311,7 @@ async function handler(
       }
       if (area === 'findings') {
         const input = await body();
+        if(input.status==='approved') {const f=await first<any>('SELECT evidence FROM findings WHERE id=?',id);if(f)assertFreshTime(JSON.parse(f.evidence));}
         if (!['new', 'approved', 'dismissed', 'review'].includes(input.status))
           throw new Error('Invalid finding status.');
         const result = await run(
@@ -327,6 +347,7 @@ async function handler(
           title = `Reported ${evidence.spec.cohort === 'all' ? '' : evidence.spec.cohort + '-involved '}crashes by ${evidence.spec.group}${evidence.spec.city ? ' in ' + evidence.spec.city : ''}: ${evidence.spec.start} to ${evidence.spec.end}`;
         } else
           throw new Error('Choose a finding or run a research query first.');
+        assertFreshTime(evidence);
         if (!evidence.total || !evidence.rows.length)
           throw new Error('There are no matching crashes to draft from.');
         if (!['page', 'newsletter', 'social'].includes(input.channel))
@@ -352,6 +373,7 @@ async function handler(
         const input = await body();
         const old = await first<any>('SELECT * FROM drafts WHERE id=?', id);
         if (!old) throw new Error('Draft not found.');
+        if(['approved','exported'].includes(input.status)) assertFreshTime(JSON.parse(old.evidence));
         if (
           typeof input.title !== 'string' ||
           !input.title.trim() ||

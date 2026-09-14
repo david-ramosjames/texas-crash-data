@@ -69,7 +69,7 @@ export async function retryJob(id: string) {
 export async function claimJob() {
   return transaction(async () => {
     const job = await first<any>(`SELECT * FROM jobs WHERE status='running' OR (status='queued' AND available_at<=now())
-      ORDER BY CASE WHEN status='running' THEN 0 WHEN kind='import' THEN 1 ELSE 2 END,created FOR UPDATE SKIP LOCKED LIMIT 1`);
+      ORDER BY CASE WHEN kind='repair_time' THEN 0 WHEN status='running' THEN 1 WHEN kind='import' THEN 2 WHEN kind='research' THEN 3 WHEN kind='propose' THEN 4 ELSE 5 END,created FOR UPDATE SKIP LOCKED LIMIT 1`);
     if (!job) return null;
     if (job.attempts >= 5) {
       await failJob(job, job.error || 'The worker was interrupted repeatedly. Check worker resources and retry.', true);

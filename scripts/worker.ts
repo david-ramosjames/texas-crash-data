@@ -5,6 +5,8 @@ import { processImport } from '../lib/process-import';
 import { discover } from '../lib/discovery';
 import { requestFailure } from '../lib/errors';
 import { reportJobFailure } from '../lib/worker-diagnostics';
+import { enqueueTimeRepair, repairTimes } from '../lib/time-repair';
+import { enqueueProposals, proposeIdeas, researchIdea } from '../lib/ideas';
 const pool = database(), workerId = crypto.randomUUID();
 let stopping = false;
 process.on('SIGTERM', () => { stopping = true; });
@@ -19,6 +21,7 @@ while (!stopping) {
     const lock = await client.query('SELECT pg_try_advisory_lock(7246231) locked');
     locked = lock.rows[0].locked;
     if (locked) await withConnection(client, async () => {
+      await enqueueTimeRepair();
       const job = await claimJob();
       await run('INSERT INTO worker_health(id,heartbeat,job_id) VALUES(?,now(),?) ON CONFLICT(id) DO UPDATE SET heartbeat=now(),job_id=excluded.job_id',workerId,job?.id || null);
       if (!job) return;
@@ -37,15 +40,21 @@ while (!stopping) {
           phase = text;
           await run('UPDATE jobs SET progress=?,updated=now() WHERE id=?',text,job.id);
         };
-        const result = job.kind === 'import' ? await processImport(job.batch_id,progress) : await discover(progress, job.id);
+        const result = job.kind === 'import' ? await processImport(job.batch_id,progress)
+          : job.kind === 'repair_time' ? await repairTimes(progress)
+          : job.kind === 'propose' ? await proposeIdeas(progress,job.id)
+          : job.kind === 'research' ? await researchIdea(job,progress)
+          : await discover(progress, job.id);
         await progress('Saving completed job');
         await transaction(async () => {
           await run("UPDATE jobs SET status='complete',result=?,error=NULL,progress='Complete',updated=now(),finished=now() WHERE id=?",JSON.stringify(result),job.id);
           if (job.kind === 'import') await enqueueDiscovery();
-          else {
+          else if(job.kind === 'discover') {
             await run("INSERT INTO settings(key,value) VALUES('last_scan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",new Date().toISOString());
             await run("INSERT INTO settings(key,value) VALUES('discovery_stale','false') ON CONFLICT(key) DO UPDATE SET value='false'");
           }
+          if(job.kind==='repair_time') await enqueueProposals();
+          if(['propose','research','repair_time'].includes(job.kind)) await run("INSERT INTO settings(key,value) VALUES('desk_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",new Date().toISOString());
         });
         console.log(`Job ${job.id} complete (${job.kind}).`);
       } catch (error) {

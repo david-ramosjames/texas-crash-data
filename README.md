@@ -66,6 +66,20 @@ Discovery now saves ranking, matching totals, and source coverage separately. A 
 
 After both Railway services finish deploying and the index migrations show **Applied**, use **Retry job** on the existing failed scan. Do not start a new scan or re-upload files to resume it. No new environment variables are needed. These changes reduce repeat work and provide matching access paths; they do not guarantee a particular runtime on an I/O-throttled instance. If a migration or scan still times out, retain its phase/code for diagnosis rather than repeatedly restarting it.
 
+## Research ideas and AM/PM correction (migration 007)
+
+Deploy both Railway services with the existing pre-deploy command `npm run db:migrate`. No new environment variables or original-file uploads are required. Keep the web start command and worker start command separate.
+
+- The worker automatically queues **Correct AM/PM hours from archived originals** for legacy imports. This reads checksum-verified crash originals and updates only changed hour values in 500-row transactions, with resumable progress. It consumes Storage reads and database I/O; allow it to finish before adding large imports. A terminal failure has a named Retry job action. It does not delete originals or change crash counts.
+- Hour-based queries are blocked until correction completes. Old hour-based findings/drafts are visibly marked and blocked from approval, AI writing and publication exports. After repair, use **Scan for findings** or re-run selected research to regenerate evidence. The correction does not automatically launch an expensive full-history scan.
+- **Ideas to research** is separate from verified Discover findings. Suggest more ideas prepares editorial templates, measured-keyword topic candidates and optional AI hypotheses from cached coverage. Suggestions do not execute crash queries. Review the exact dates/filters, then approve an individual research job. Duplicate approval and worker replay do not duplicate findings.
+- Finding cards show their period. Research supports matched year-over-year or previous equal-length-period comparisons. Both source intervals must be loaded. Absent ranked groups are not assumed zero. The extra filters expose exact road/weather/light/model/first-factor labels, rural flag, hour, posted-speed-limit and vehicle-model-year ranges. These are not every CSV column.
+- Keyword Planner was inspected on 2026-09-14 with Texas / English / Google / September 2025–August 2026. This account showed ranges, not exact counts. Checked topic signals are included with provenance; no campaign or billing changes were made. These figures are not search volume for a generated question, not SEO difficulty, and not LLM prompt volume. Close variants must not be summed as independent demand.
+- The Planner export importer accepts up to 500 English-export CSV/TSV rows under 750 KB, including UTF-16 exports. Record geography, language, network and date range. Unsupported legal/live-incident/participant-identification and certain unmapped research intents are skipped. Review mapped filters before approval. The app is not continuously connected to your Google Ads account.
+- Impairment and distraction topic opportunities are shown as **field-expansion backlog**, not automatically executed using an incomplete first-factor proxy.
+
+Your existing 2022-onward history is sufficient to use these features; no 2020–2021 load is required. Supabase Storage holds originals while research reads private PostgreSQL tables under schema **studio**, not **public**. Person, primary-person, charges, damages, endorsements and restrictions are currently validated/archived, not fully indexed as research tables.
+
 ## Data safeguards
 
 - Original file chunks live in a private Supabase bucket, addressed by SHA-256. They never ship in the app or GitHub repository. Worker reads verify checksums.

@@ -87,6 +87,9 @@ import { uploadFiles, UploadProgress, validateResumeSelection } from '@/lib/uplo
 import { ImportRecovery, type RecoveryBatch } from '@/components/import-recovery';
 import { identify } from '@/lib/csv';
 import { renderPage } from '@/lib/export';
+import { IdeasInbox } from './ideas-inbox';
+import { ExtraFilters, ComparisonFilter } from './research-fields';
+import { periodLabel, needsTimeRefresh } from '@/lib/research-quality';
 
 async function api(path: string, body?: unknown, raw?: Blob) {
   const response = await fetch('/api/' + path, {
@@ -109,6 +112,7 @@ async function api(path: string, body?: unknown, raw?: Blob) {
 }
 const NAV = [
   { key: 'discover', label: 'Discover', icon: Inbox },
+  { key: 'ideas', label: 'Research ideas', icon: Sparkles },
   { key: 'research', label: 'Research', icon: FlaskConical },
   { key: 'editorial', label: 'Editorial', icon: FileText },
   { key: 'data', label: 'Data library', icon: Database },
@@ -148,6 +152,7 @@ export default function Studio() {
       null,
     );
   const [filter, setFilter] = useState('new'),
+    [periodFilter,setPeriodFilter]=useState('all'),
     [search, setSearch] = useState(''),
     [selected, setSelected] = useState<Finding | null>(null),
     [draft, setDraft] = useState<Draft | null>(null),
@@ -450,6 +455,7 @@ export default function Studio() {
     domains: Domain[] = data?.domains || [];
   const visible = findings.filter(
     (f) =>
+      (periodFilter==='all'||(periodFilter==='comparison'&&!!f.evidence.comparison)||(periodFilter==='annual'&&periodLabel(f.evidence).startsWith('Annual'))||(periodFilter==='latest'&&f.updated>=(data?.settings.last_scan||'').slice(0,10))) &&
       (filter === 'all' ||
         (filter === 'new' && ['new', 'review'].includes(f.status)) ||
         f.status === filter) &&
@@ -680,6 +686,7 @@ export default function Studio() {
                     </Button>
                   </div>
                   <div className="inbox-toolbar">
+                    <Choice label="Finding period" value={periodFilter} onChange={setPeriodFilter} options={{all:'All periods',comparison:'Comparisons',annual:'Full-year findings',latest:'Updated on latest scan date'}}/>
                     <Tabs
                       value={filter}
                       onValueChange={(v) => setFilter(String(v))}
@@ -714,7 +721,7 @@ export default function Studio() {
                           <span className="pill">{f.category}</span>
                           <span
                             className="priority"
-                            title="Editorial priority heuristic, not statistical confidence"
+                            title="Editorial priority heuristic, not statistical confidence or search volume"
                           >
                             Priority {f.score}
                           </span>
@@ -723,10 +730,13 @@ export default function Studio() {
                           className="finding-title"
                           onClick={() => setSelected(f)}
                         >
+                          <p className="fine-print">{periodLabel(f.evidence)}</p>
                           <h2>{f.title}</h2>
                         </button>
                         <p>{f.summary}</p>
-                        <Bars e={f.evidence} small />
+                        {needsTimeRefresh(f.evidence)&&<p role="alert">Needs fresh research after AM/PM correction.</p>}
+                        {/not reported/i.test(f.title)&&<p role="alert">Missing-location label: do not publish as a named road. Run a new scan to refresh.</p>}
+                        <Bars e={f.evidence} small focusLabel={f.title.split(':')[0]} />
                         <div className="card-footer">
                           <span>
                             {f.status === 'review'
@@ -763,6 +773,8 @@ export default function Studio() {
                   </p>
                 </>
               )}
+              {data.timeRepairNeeded&&<section className="panel"><h3>AM/PM correction in progress or required</h3><p>The worker will repair imported hours from archived originals. Hour-based research is paused until it finishes. Check the named repair job in Data library; old hour findings must be regenerated.</p></section>}
+              {view === 'ideas' && <IdeasInbox ideas={data.ideas||[]} summary={s} api={api} refresh={refresh} selectFinding={id=>{setSelected(findings.find(f=>f.id===id)||null);navigate('discover');}}/>}
               {view === 'research' && s.ready && (
                 <>
                   <div className="page-heading">
@@ -897,6 +909,8 @@ export default function Studio() {
                     <details className="advanced">
                       <summary>Additional filters</summary>
                       <div className="filter-grid">
+                        <ComparisonFilter spec={spec} onChange={setSpec}/>
+                        <ExtraFilters spec={spec} onChange={setSpec}/>
                         {(['county', 'make', 'color'] as const).map((k) => (
                           <div className="field" key={k}>
                             <label htmlFor={'filter-' + k}>
@@ -1204,6 +1218,7 @@ export default function Studio() {
               )}
               {view === 'data' && (
                 <>
+                  <details className="panel"><summary>Where your data lives: originals and database tables</summary><p>Supabase Storage preserves every original CSV privately. Research reads indexed PostgreSQL tables in the <code>studio</code> schema: <code>crashes</code>, <code>current_crashes</code>, <code>units</code> and <code>lookups</code>. In Supabase Table Editor, switch the schema selector from public to studio.</p><p>The other six file types are validated and archived, not yet exposed as research tables. The filters cover a useful subset of the crash and vehicle fields, not every source column. There is no need to import 2020–2021 or expose the studio schema through the public Data API.</p></details>
                   <div className="page-heading">
                     <div>
                       <p className="eyebrow">YOUR SOURCE OF TRUTH</p>
@@ -1328,10 +1343,11 @@ export default function Studio() {
                     {data.jobs?.map((job:any) => {
                       const result = job.result ? JSON.parse(job.result) : null;
                       return <div key={job.id} style={{borderTop:'1px solid var(--border)',padding:'16px 0'}}>
-                        <div className="section-heading compact"><strong>{job.kind==='import'?'Import and validation':'Discovery scan'}</strong><span className={'pill '+(job.status==='complete'?'green':'amber')}>{job.status}</span></div>
+                        <div className="section-heading compact"><strong>{job.label || (job.kind==='import'?'Import and validation':job.kind==='discover'?'Discovery scan':job.kind)}</strong><span className={'pill '+(job.status==='complete'?'green':'amber')}>{job.status}</span></div>
                         <p>{job.progress}</p>{job.batch_id && <p className="fine-print">{job.batch_id}</p>}
                         <p className="fine-print">Job <code>{job.id}</code> · Attempt {job.attempts}/5{job.updated && ` · Updated ${new Date(job.updated).toLocaleString()}`}</p>
                         {job.error && <p role="status"><strong>Last failure:</strong> {job.error}</p>}
+                        {result && job.kind!=='discover' && <p>{result.note}{result.aiError && ` AI assistance: ${result.aiError}`}</p>}
                         {result && job.kind==='discover' && <p>{result.created} new findings · {result.refreshed} refreshed · {result.probes} questions tested. {result.resumed > 0 && `${result.resumed} completed questions reused. `}{result.aiError && `AI assistance: ${result.aiError}`}</p>}
                         {job.status==='failed' && <Button variant="outline" disabled={!!busy} onClick={()=>action('Retrying',async()=>{await api(`jobs/${job.id}/retry`,{});await refresh();})}>Retry job</Button>}
                       </div>;
@@ -1770,6 +1786,7 @@ export default function Studio() {
           {selected && (
             <div className="sheet-scroll">
               <p>{selected.summary}</p>
+              {needsTimeRefresh(selected.evidence)&&<Button onClick={()=>{setSpec(selected.evidence.spec);setSelected(null);navigate('research');}}>Re-run these filters after AM/PM repair</Button>}
               <div className="review-actions">
                 <Button
                   disabled={!!busy}

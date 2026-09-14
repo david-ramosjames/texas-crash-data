@@ -50,6 +50,7 @@ test('export escapes markup and spreadsheet formulas',()=>{
 test('PostgreSQL ingestion, revision precedence, jobs, discovery and all research dimensions',async(t)=>{
  const pg = new PGlite();
  await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
+  await pg.exec(await readFile(new URL('../migrations/007_research_desk.sql',import.meta.url),'utf8'));
  await pg.exec(await readFile(new URL('../migrations/004_discovery_checkpoints.sql',import.meta.url),'utf8'));
  const connection={query:async(sql:string,args?:any[])=>{const r=await pg.query(sql,args);return {...r,rowCount:r.affectedRows};}};
  try { await withConnection(connection,async()=>{
@@ -118,6 +119,8 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     await discover();assert.equal((await first<any>('SELECT status FROM findings WHERE id=?',f.id)).status,'dismissed');
   });
   await t.test('coalesced jobs, interrupted-worker reclamation, retries and terminal failure',async()=>{
+    const proposal=await claimJob();assert.equal(proposal.kind,'propose');
+    await run("UPDATE jobs SET status='complete' WHERE id=?",proposal.id);
     const j=await enqueueDiscovery();assert.equal((await enqueueDiscovery()).id,j.id);
     const claimed=await claimJob();assert.equal(claimed.id,j.id);
     const restarted=await claimJob();assert.equal(restarted.id,j.id);assert.equal(restarted.attempts,2);

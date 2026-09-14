@@ -18,6 +18,7 @@ const files = () => FILE_TYPES.map(kind => new File(['original'], `extract_publi
 test('resume safely handles missing originals, interrupted queueing, failed jobs and completed batches', async () => {
   const pg = new PGlite();
   await pg.exec(await readFile(new URL('../migrations/001_core.sql', import.meta.url), 'utf8'));
+  await pg.exec(await readFile(new URL('../migrations/007_research_desk.sql',import.meta.url),'utf8'));
   try { await withConnection({ query: async (sql, args) => { const r = await pg.query(sql, args); return { ...r, rowCount: r.affectedRows }; } }, async () => {
     await assert.rejects(() => resumeImport('missing'), /Unknown import batch/);
     const batch = await beginImport({ files: files().map(f => ({ name: f.name, bytes: f.size })) });

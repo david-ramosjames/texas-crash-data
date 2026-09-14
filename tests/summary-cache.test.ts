@@ -9,6 +9,7 @@ import { activity } from '../lib/activity';
 test('paged summary caches exact active totals; web reads and activity polling never scan crash tables', async () => {
   const pg = new PGlite();
   await pg.exec(await readFile(new URL('../migrations/001_core.sql', import.meta.url), 'utf8'));
+  await pg.exec(await readFile(new URL('../migrations/007_research_desk.sql',import.meta.url),'utf8'));
   const queries: string[] = [];
   const connection = { query: async (sql: string, args?: any[]) => {
     queries.push(sql); const r = await pg.query(sql, args); return { ...r, rowCount: r.affectedRows };

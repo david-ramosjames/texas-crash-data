@@ -80,7 +80,7 @@ export async function beginImport(input: any) {
   await db().batch([
     db()
       .prepare(
-        'INSERT INTO batches(id,extraction,start,"end",status,created,manifest) VALUES(?,?,?,?,\'uploading\',?,?)',
+        'INSERT INTO batches(id,extraction,start,"end",status,created,manifest,time_parser_version) VALUES(?,?,?,?,\'uploading\',?,?,2)',
       )
       .bind(
         firstMeta.id,

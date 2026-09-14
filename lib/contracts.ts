@@ -39,12 +39,25 @@ export type Spec = {
   cohort: keyof typeof COHORTS;
   group: keyof typeof GROUPS;
   metric: 'crashes' | 'severe' | 'fatal';
+  compare?: 'year_over_year' | 'previous_period';
   start: string;
   end: string;
   city?: string;
   county?: string;
   make?: string;
   color?: string;
+  road?: string;
+  weather?: string;
+  light?: string;
+  model?: string;
+  factor?: string;
+  rural?: string;
+  hourFrom?: number;
+  hourThrough?: number;
+  speedMin?: number;
+  speedMax?: number;
+  yearMin?: number;
+  yearMax?: number;
   latitude?: number;
   longitude?: number;
   radiusMeters?: number;
@@ -61,7 +74,10 @@ export type ResultRow = {
   share?: number;
 };
 export type Evidence = {
+  timeVersion?: number;
   comparison?: {
+    kind?: string;
+    focusLabel?: string;
     start: string;
     end: string;
     rows: ResultRow[];

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { first, run, transaction } from "./db";
 
 // Bump when research/finding semantics change. Never reuse older algorithm results.
-const VERSION = "discovery-v1-body-join";
+const VERSION = "discovery-v2-hour-quality";
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object")
