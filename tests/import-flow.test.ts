@@ -52,7 +52,7 @@ test('original upload → sealed job → interrupted parsing → resumed activat
   try{await withConnection(connection,async()=>{
     const ids=Array.from({length:600},(_,i)=>String(i+1).padStart(6,'0'));
     const content:Record<string,string>={
-      crash:'Crash_ID,Crash_Date,City_ID,Cnty_ID,Crash_Sev_ID,At_Intrsct_Fl,Rpt_Street_Name,Rpt_Sec_Street_Name,Crash_Time\n'+ids.map(id=>`${id},12/10/2024,1,1,1,Y,MAIN,OAK,06:00 PM`).join('\n')+'\n',
+      crash:'Crash_ID,Crash_Date,City_ID,Cnty_ID,Crash_Sev_ID,At_Intrsct_Fl,Rpt_Street_Name,Rpt_Sec_Street_Name,Crash_Time\n'+ids.map(id=>`${id},12/10/2024,1,1,1,Y,MAIN,OAK,${id === '000114' ? '00:00 AM' : id === '000599' ? '12:00 PM' : id === '000600' ? '12:00 AM' : '06:00 PM'}`).join('\n')+'\n',
       unit:'Crash_ID,Unit_Nbr,Unit_Desc_ID,Veh_Body_Styl_ID,Veh_Make_ID,Veh_Color_ID\n'+ids.map(id=>`${id},1,1,106,1,1`).join('\n')+'\n',
       lookup:'ColumnName,ID,Description\nCITY_ID,1,DALLAS\nCNTY_ID,1,DALLAS\nVEH_BODY_STYL_ID,106,TRUCK\nVEH_MAKE_ID,1,FORD\nVEH_COLOR_ID,1,WHITE\n',
     };
@@ -80,6 +80,7 @@ test('original upload → sealed job → interrupted parsing → resumed activat
     const original=await new Response(await originalStream(b.id,'crash')).text();assert.equal(original,content.crash);
     assert((await processImport(b.id,async()=>{})).duplicate);
     assert.equal((await first<any>("SELECT hour FROM crashes WHERE id='000001'")).hour,18);
+    assert.equal((await first<any>("SELECT hour FROM crashes WHERE id='000114'")).hour,0);
     // Simulate a batch completed by the pre-fix deployment for backfill testing.
     await run('UPDATE batches SET time_parser_version=1 WHERE id=?',b.id);
     await run('UPDATE crashes SET hour=6 WHERE batch_id=?',b.id);
@@ -93,7 +94,9 @@ test('original upload → sealed job → interrupted parsing → resumed activat
     assert.equal((await first<any>('SELECT time_parser_version FROM batches WHERE id=?',b.id)).time_parser_version,1);
     await repairTimes(async()=>{});
     assert.equal((await first<any>('SELECT changed FROM time_repairs')).changed,600);
-    assert.equal((await first<any>('SELECT COUNT(*) n FROM crashes WHERE hour=18')).n,600);
+    assert.equal((await first<any>('SELECT COUNT(*) n FROM crashes WHERE hour=18')).n,597);
+    assert.equal((await first<any>('SELECT COUNT(*) n FROM crashes WHERE hour=0')).n,2);
+    assert.equal((await first<any>('SELECT COUNT(*) n FROM crashes WHERE hour=12')).n,1);
     const after=await cachedSummary();assert.deepEqual(after.value,before.value);assert.notEqual(after.generation,before.generation);
     const hours=await research(validateSpec({group:'hour',start:'2024-12-10',end:'2024-12-31'}));
     assert.equal(hours.rows[0].label,'18:00');assert.equal(hours.timeVersion,2);

@@ -21,6 +21,9 @@ const spec = validateSpec({ start: "2024-01-01", end: "2024-12-31", group: "city
 test("AM/PM parsing distinguishes midnight, noon, evening and unknown time", () => {
   for (const [value, hour] of [
     ["12:00 AM", 0],
+    ["00:00 AM", 0],
+    ["00:00:00 AM", 0],
+    [" 00:00 am ", 0],
     ["12:00 PM", 12],
     ["06:15 PM", 18],
     ["6:15:59 am", 6],
@@ -31,7 +34,7 @@ test("AM/PM parsing distinguishes midnight, noon, evening and unknown time", () 
     ["99:99", null],
   ] as const)
     assert.equal(parseCrashHour(value), hour, value);
-  for (const value of ["25:00", "12:60 AM", "00:30 PM", "13:00 PM", "garbage"])
+  for (const value of ["25:00", "12:60 AM", "00:30 PM", "00:00 PM", "00:01 AM", "00:00:01 AM", "13:00 PM", "garbage"])
     assert.throws(() => parseCrashHour(value), /Crash_Time/);
 });
 test("every minute of the observed 12-hour TxDOT format maps to the correct hour", () => {

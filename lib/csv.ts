@@ -126,6 +126,11 @@ export class CrashTimeFormatError extends Error {
 export function parseCrashHour(value: string): number | null {
   const s=value.trim().toUpperCase();
   if(!s || /^(UNKNOWN|NOT REPORTED|NOT RECORDED|99:99|9999)$/.test(s)) return null;
+  // Original TxDOT extracts also spell midnight "00:00 AM". CR-100
+  // section 3.2.2 defines 0000 as midnight; do not turn this into unknown.
+  // Keep the exception narrow: zero-hour PM and nonzero AM minutes/seconds
+  // are not the observed variant and must still fail validation.
+  if(/^00:00(?::00)?\s*AM$/.test(s)) return 0;
   const m=s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/);
   if(m) {
     let h=Number(m[1]);
