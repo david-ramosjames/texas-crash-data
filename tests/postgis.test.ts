@@ -3,11 +3,18 @@ import { test } from 'node:test';
 import pg from 'pg';
 import { withConnection, all, first, run } from '../lib/db';
 import { compile, research, validateSpec } from '../lib/research';
+import { applyIndexMigration } from '../lib/index-migration';
+import { readFile } from 'node:fs/promises';
 test('native PostgreSQL: PostGIS generated points, radius queries, privacy grants and worker locks',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:'-c search_path=studio,extensions,public'});
  const a=await pool.connect(),b=await pool.connect();
  try {
   assert((await a.query('SELECT PostGIS_Version() version')).rows[0].version);
+  for(const name of ['005_city_research','006_unit_kind_research']) {
+    const source=await readFile(new URL(`../migrations/${name}.index.json`,import.meta.url),'utf8');
+    await applyIndexMigration(a,source); // Verify real catalog shape and safe replay after CI migrations.
+    assert.equal((await a.query("SELECT i.indisvalid valid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='studio' AND c.relname=$1",[JSON.parse(source).name])).rows[0].valid,true);
+  }
   assert.equal((await a.query("SELECT COUNT(*) n FROM pg_tables WHERE schemaname='studio' AND NOT rowsecurity")).rows[0].n,0);
   await a.query('SELECT pg_advisory_lock(7246231)');
   assert.equal((await b.query('SELECT pg_try_advisory_lock(7246231) locked')).rows[0].locked,false);
@@ -15,6 +22,14 @@ test('native PostgreSQL: PostGIS generated points, radius queries, privacy grant
   assert.equal((await b.query('SELECT pg_try_advisory_lock(7246231) locked')).rows[0].locked,true);
   await b.query('SELECT pg_advisory_unlock(7246231)');
   await a.query('BEGIN');
+  // Prove expression/kind predicates can use the new indexes; this is not a
+  // production benchmark or a promise about the optimizer's live plan.
+  await a.query('SET LOCAL enable_seqscan=off');
+  const cityPlan=await a.query("EXPLAIN (FORMAT JSON) SELECT * FROM studio.crashes WHERE upper(city)=upper('Dallas')");
+  assert.match(JSON.stringify(cityPlan.rows),/crashes_city_upper_date/);
+  const kindPlan=await a.query('EXPLAIN (FORMAT JSON) SELECT batch_id,crash_id FROM studio.units WHERE kind=4');
+  assert.match(JSON.stringify(kindPlan.rows),/units_kind_crash/);
+  await a.query('SET LOCAL enable_seqscan=on');
   await withConnection(a,async()=>{
    await run(`INSERT INTO batches(id,extraction,start,"end",status,created,manifest) VALUES('geo-test','20260101000000','2024-01-01','2024-01-31','complete','2026-01-01','[]')`);
    for(const [id,lat,lon] of [['1',32.78,-96.8],['2',29.76,-95.36],['3',null,null]]) {

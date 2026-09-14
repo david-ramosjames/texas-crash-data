@@ -184,6 +184,26 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     assert.equal(replay.resumed,27);assert.equal(replay.created,result.created);assert.equal(replay.refreshed,result.refreshed);
     await run("UPDATE jobs SET status='complete' WHERE id=?",job.id);
   });
+  await t.test('pedestrian hour analysis resumes individual SQL stages after counting and source timeouts',async()=>{
+    const cp=await discoveryCheckpoints(checkpointJobId);
+    const spec=validateSpec({cohort:'pedestrian',group:'hour',city:'Dallas',metric:'crashes',start:'2024-12-10',end:'2024-12-31',min:1,limit:10});
+    const counts={ranking:0,totals:0,sources:0};
+    let fail='totals';
+    const connection={query:async(sql:string,args?:any[])=>{
+      const stage=sql.startsWith('WITH matched')?'ranking':sql.startsWith('SELECT COUNT(*) total')?'totals':sql.startsWith('SELECT DISTINCT b.id')?'sources':null;
+      if(stage){counts[stage]++;if(stage===fail)throw Object.assign(new Error('synthetic timeout'),{code:'57014'});}
+      return pg.query(sql,args);
+    }};
+    const attempt=()=>withConnection(connection,()=>research(spec,async()=>{},
+      (stage,task)=>cp.query('research-stage-v1',{spec,stage},stage,async()=>{},task)));
+    await assert.rejects(attempt,{code:'57014'});
+    fail='sources';await assert.rejects(attempt,{code:'57014'});
+    fail='';const resumed=await attempt();
+    assert.deepEqual(counts,{ranking:1,totals:2,sources:2});
+    const fresh=await research(spec);
+    assert.deepEqual({...resumed,generated:''},{...fresh,generated:''});
+    await attempt();assert.deepEqual(counts,{ranking:1,totals:2,sources:2});
+  });
   await t.test('checkpoint and finding writes roll back together, and input identity is canonical',async()=>{
     const cp=await discoveryCheckpoints(checkpointJobId);
     await assert.rejects(()=>cp.commit('rollback',{a:1,b:2},async()=>{

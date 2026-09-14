@@ -11,7 +11,18 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
   const checkpoints = await discoveryCheckpoints(jobId);
   const scanResearch = (spec: Spec, label: string) =>
     checkpoints.query("research", spec, label, progress, () =>
-      research(spec, (stage) => progress(`${label} · ${stage}`)),
+      research(
+        spec,
+        (stage) => progress(`${label} · ${stage}`),
+        (stage, task) =>
+          checkpoints.query(
+            "research-stage-v1",
+            { spec, stage },
+            `${label} · ${stage}`,
+            progress,
+            task,
+          ),
+      ),
     );
   const probes: {
     cohort: Spec["cohort"];

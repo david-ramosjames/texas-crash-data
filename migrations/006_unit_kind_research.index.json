@@ -1,0 +1,5 @@
+{
+  "name": "units_kind_crash",
+  "table": "units",
+  "keys": ["kind", "batch_id", "crash_id"]
+}

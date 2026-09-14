@@ -56,6 +56,16 @@ The first run after upgrading cannot reuse work from the older version, because 
 
 Body-style rankings use a batch-specific lookup join instead of a per-vehicle correlated subquery. The lookup's primary key keeps that join one-to-one. Distinct-crash counting by displayed label, missing-code behavior, vehicle filters, and source-specific descriptions are preserved. This is a query optimization, not a change to the definition of a truck or to reported crash counts.
 
+### City/pedestrian timeouts and within-question recovery
+
+Migrations `005_city_research.index.json` and `006_unit_kind_research.index.json` add btree indexes for `upper(city), date` and `kind, batch_id, crash_id`. The migration runner builds each index concurrently, outside a transaction, with a migration-only 30-minute statement limit and 15-second lock limit. Normal research retains its existing timeout. Concurrent builds permit normal writes but still consume disk space and I/O; postpone additional imports until deployment finishes. See [PostgreSQL concurrent-index guidance](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY).
+
+Both services can run the migration command: a session lock serializes migrations (up to 65 minutes waiting for the other deploy). Successful indexes are verified before the migration is recorded. Retrying an interrupted migration reuses a matching valid index or rebuilds only a matching invalid index left by the interrupted build. Conflicting definitions fail safely. Previously applied SQL migrations and checksums remain unchanged.
+
+Discovery now saves ranking, matching totals, and source coverage separately. A timeout during counting no longer discards a completed ranking; failure during source coverage preserves both ranking and totals. Existing complete-question checkpoints remain compatible. Failed stages are never saved as successful, and exact counts and editorial decisions are unchanged.
+
+After both Railway services finish deploying and the index migrations show **Applied**, use **Retry job** on the existing failed scan. Do not start a new scan or re-upload files to resume it. No new environment variables are needed. These changes reduce repeat work and provide matching access paths; they do not guarantee a particular runtime on an I/O-throttled instance. If a migration or scan still times out, retain its phase/code for diagnosis rather than repeatedly restarting it.
+
 ## Data safeguards
 
 - Original file chunks live in a private Supabase bucket, addressed by SHA-256. They never ship in the app or GitHub repository. Worker reads verify checksums.

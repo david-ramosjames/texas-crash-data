@@ -1,0 +1,5 @@
+{
+  "name": "crashes_city_upper_date",
+  "table": "crashes",
+  "keys": ["upper(city)", "date"]
+}
