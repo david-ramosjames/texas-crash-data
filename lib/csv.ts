@@ -85,6 +85,9 @@ export async function* readCSV(file: { stream(): ReadableStream<Uint8Array> }) {
       if (done) break;
     }
   } finally {
+    // A validation error ends the consumer early. Stop fetching archived parts
+    // instead of leaving a paused source download behind on each failed attempt.
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -112,13 +115,21 @@ export function identify(name: string) {
   };
 }
 export type Lookup = Map<string, string>;
+// A deterministic source validation failure: retrying unchanged bytes cannot fix it.
+// Keep source values out of both this message and deployment logs.
+export class CrashTimeFormatError extends Error {
+  constructor(public readonly record?: number) {
+    super(`Invalid Crash_Time format${record === undefined ? '' : ` at crash record ${record} (header excluded)`}; original preserved. Inspect this record in the original crash CSV before retrying.`);
+    this.name = 'CrashTimeFormatError';
+  }
+}
 export function parseCrashHour(value: string): number | null {
   const s=value.trim().toUpperCase();
   if(!s || /^(UNKNOWN|NOT REPORTED|NOT RECORDED|99:99|9999)$/.test(s)) return null;
   const m=s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/);
   if(m) {
     let h=Number(m[1]);
-    if(Number(m[2])>59 || Number(m[3] || 0)>59 || (m[4] ? h<1 || h>12 : h>23)) throw new Error('Invalid Crash_Time format; original preserved.');
+    if(Number(m[2])>59 || Number(m[3] || 0)>59 || (m[4] ? h<1 || h>12 : h>23)) throw new CrashTimeFormatError();
     if(m[4]) h=h%12+(m[4]==='PM'?12:0);
     return h;
   }
@@ -126,7 +137,7 @@ export function parseCrashHour(value: string): number | null {
     const h=Number(s.slice(0,-2)), minutes=Number(s.slice(-2));
     if(h<24 && minutes<60) return h;
   }
-  throw new Error('Invalid Crash_Time format; original preserved.');
+  throw new CrashTimeFormatError();
 }
 export function decode(map: Lookup, column: string, value: string) {
   return (

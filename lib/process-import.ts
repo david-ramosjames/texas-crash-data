@@ -1,5 +1,5 @@
 import { all, first, run, bucket } from './db';
-import { readCSV, normalize, type Lookup } from './csv';
+import { readCSV, normalize, CrashTimeFormatError, type Lookup } from './csv';
 import { storeRows, finishFile, activate } from './importer';
 import { createHash } from 'node:crypto';
 export async function originalStream(batch: string, kind: string) {
@@ -41,7 +41,12 @@ export async function processImport(batch: string, progress: (text: string) => P
       await progress(`Indexing ${kind} · ${count.toLocaleString('en-US')} rows verified`);
     };
     for await (const row of readCSV({ stream: () => stream })) {
-      rows.push(normalize(row,kind,map,state.time_parser_version<2));
+      try {
+        rows.push(normalize(row,kind,map,state.time_parser_version<2));
+      } catch (error) {
+        if (error instanceof CrashTimeFormatError) throw new CrashTimeFormatError(count + rows.length + 1);
+        throw error;
+      }
       if (rows.length === 500) await send();
     }
     await send(); await finishFile(batch,kind,{rows:count});

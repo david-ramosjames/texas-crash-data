@@ -5,6 +5,26 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { withConnection, run } from '../lib/db';
 import { research, validateSpec } from '../lib/research';
 import { reportJobFailure } from '../lib/worker-diagnostics';
+import { CrashTimeFormatError } from '../lib/csv';
+
+test('invalid source times stop automatic retries and retain a safe record location', async () => {
+  const logs: unknown[] = [];
+  let saved = '', terminal: boolean | undefined;
+  await reportJobFailure({ id: 'job', kind: 'repair_time', attempts: 1 }, 'Checking Crash_Time · test-batch · record 17',
+    new CrashTimeFormatError(17), async (_job, message, stop) => { saved = message; terminal = stop; },
+    (message, details) => { logs.push({ message, details }); });
+  assert.equal(terminal, true);
+  assert.match(saved, /CRASH_TIME_FORMAT/);
+  assert.match(saved, /record 17 \(header excluded\)/);
+  assert.match(JSON.stringify(logs), /CRASH_TIME_FORMAT/);
+});
+
+test('transient time repair network failures still retry', async () => {
+  let terminal: boolean | undefined;
+  await reportJobFailure({ id: 'job', kind: 'repair_time', attempts: 1 }, 'Reading archived crash CSV',
+    { code: 'ECONNRESET' }, async (_job, _message, stop) => { terminal = stop; }, () => {});
+  assert.equal(terminal, false);
+});
 
 const spec = validateSpec({ cohort: 'all', group: 'city', metric: 'crashes', start: '2024-12-01', end: '2024-12-31', min: 1, limit: 10 });
 

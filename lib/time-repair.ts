@@ -1,6 +1,6 @@
 import { all, first, run, transaction } from "./db";
 import { originalStream } from "./process-import";
-import { readCSV, parseCrashHour } from "./csv";
+import { readCSV, parseCrashHour, CrashTimeFormatError } from "./csv";
 import { cachedSummary } from "./summary-cache";
 
 export async function enqueueTimeRepair() {
@@ -74,7 +74,16 @@ export async function repairTimes(
     for await (const row of readCSV({ stream: () => stream })) {
       seen++;
       if (seen <= saved.rows_done) continue;
-      pending.push({ id: row.Crash_ID?.trim(), hour: parseCrashHour(row.Crash_Time || "") });
+      let hour: number | null;
+      try {
+        hour = parseCrashHour(row.Crash_Time || "");
+      } catch (error) {
+        if (!(error instanceof CrashTimeFormatError)) throw error;
+        // Batch IDs encode the source date range, not crash/person identifiers.
+        await progress(`Checking Crash_Time · ${b.id} · record ${seen}`);
+        throw new CrashTimeFormatError(seen);
+      }
+      pending.push({ id: row.Crash_ID?.trim(), hour });
       if (pending.length === 500) await flush();
     }
     await flush();

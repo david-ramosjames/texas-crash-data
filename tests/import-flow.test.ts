@@ -8,7 +8,7 @@ import { beginImport, storeRaw } from '../lib/importer';
 import { queueImport, claimJob, failJob, resumeImport } from '../lib/jobs';
 import { processImport, originalStream } from '../lib/process-import';
 import { FILE_TYPES } from '../lib/contracts';
-import { identify } from '../lib/csv';
+import { identify, CrashTimeFormatError } from '../lib/csv';
 import { uploadFiles } from '../lib/upload';
 import { enqueueTimeRepair, repairTimes } from '../lib/time-repair';
 import { research, validateSpec, summary } from '../lib/research';
@@ -101,6 +101,23 @@ test('original upload → sealed job → interrupted parsing → resumed activat
     const saved=objects.get(key)!;objects.set(key,Buffer.from('corrupted'));
     await assert.rejects(async()=>{const stream=await originalStream(b.id,'crash');await new Response(stream).text();},/checksum/);
     objects.set(key,saved);
+    // Unknown formats must not be silently converted to midnight/null or
+    // activate a partial batch. Successful repair chunks remain resumable.
+    const invalidContent = content.crash.replace('000501,12/10/2024,1,1,1,Y,MAIN,OAK,06:00 PM', '000501,12/10/2024,1,1,1,Y,MAIN,OAK,13:00 PM');
+    const invalidFiles = FILE_TYPES.map(kind => new File([kind === 'crash' ? invalidContent : content[kind]], `extract_public_2023_20260914124847_${kind}_20241210-20241231Texas.csv`));
+    const invalidBatch = await beginImport({ files: invalidFiles.map(f => ({ name: f.name, bytes: f.size })) });
+    await run('UPDATE batches SET time_parser_version=1 WHERE id=?', invalidBatch.id);
+    for (const file of invalidFiles) await storeRaw(invalidBatch.id, identify(file.name).kind, 0, new Request('http://localhost/raw', { method: 'POST', body: file }));
+    await queueImport(invalidBatch.id);
+    const phases: string[] = [];
+    await assert.rejects(() => processImport(invalidBatch.id, async phase => { phases.push(phase); }), error => error instanceof CrashTimeFormatError && error.record === 501);
+    assert.match(phases.at(-1)!, /Checking Crash_Time.*record 501/);
+    assert.equal((await first<any>('SELECT rows_done FROM time_repairs WHERE batch_id=?', invalidBatch.id)).rows_done, 500);
+    assert.equal((await first<any>('SELECT time_parser_version FROM batches WHERE id=?', invalidBatch.id)).time_parser_version, 1);
+    assert.equal((await first<any>('SELECT COUNT(*) n FROM current_crashes WHERE batch_id=?', invalidBatch.id)).n, 0);
+    assert.equal(await new Response(await originalStream(invalidBatch.id, 'crash')).text(), invalidContent);
+    await assert.rejects(() => repairTimes(async () => {}, invalidBatch.id), error => error instanceof CrashTimeFormatError && error.record === 501);
+    assert.equal((await first<any>('SELECT rows_done FROM time_repairs WHERE batch_id=?', invalidBatch.id)).rows_done, 500);
   });}finally{await pg.close();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
 

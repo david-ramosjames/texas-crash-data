@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
-import { parseCrashHour, CSVParser } from "../lib/csv";
+import { parseCrashHour, CSVParser, readCSV } from "../lib/csv";
 import { validateSpec, compile, research } from "../lib/research";
 import {
   comparisonRow,
@@ -33,6 +33,25 @@ test("AM/PM parsing distinguishes midnight, noon, evening and unknown time", () 
     assert.equal(parseCrashHour(value), hour, value);
   for (const value of ["25:00", "12:60 AM", "00:30 PM", "13:00 PM", "garbage"])
     assert.throws(() => parseCrashHour(value), /Crash_Time/);
+});
+test("every minute of the observed 12-hour TxDOT format maps to the correct hour", () => {
+  for (let hour = 0; hour < 24; hour++) {
+    for (let minute = 0; minute < 60; minute++) {
+      const time = `${String(hour % 12 || 12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+      assert.equal(parseCrashHour(time), hour, time);
+    }
+  }
+});
+test("aborting CSV validation cancels the archived source stream", async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode('Crash_Time\ninvalid\n')); },
+    cancel() { cancelled = true; },
+  });
+  await assert.rejects(async () => {
+    for await (const row of readCSV({ stream: () => stream })) parseCrashHour(row.Crash_Time);
+  }, /Crash_Time/);
+  assert.equal(cancelled, true);
 });
 test("new filters are validated and use one matching vehicle", () => {
   const s = validateSpec({
