@@ -1,5 +1,6 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { singleFlight, pollAfterCompletion } from '@/lib/polling';
 import {
   ArrowUpRight,
   ArrowRight,
@@ -170,8 +171,10 @@ export default function Studio() {
     folderInput = useRef<HTMLInputElement>(null),
     uploadAbort = useRef<AbortController | null>(null),
     initial = useRef(true);
-  const refresh = useCallback(async () => {
+  const loadedRevision = useRef<string | undefined>(undefined);
+  const refresh = useMemo(() => singleFlight(async () => {
     const next = await api('bootstrap');
+    loadedRevision.current = next.revision;
     setData(next);
     if (initial.current && next.summary.start) {
       setSpec({
@@ -182,7 +185,7 @@ export default function Studio() {
       initial.current = false;
     }
     return next;
-  }, []);
+  }), []);
   useEffect(() => {
     refresh().catch((e) => setError(e.message));
     const hash = () => {
@@ -354,15 +357,22 @@ export default function Studio() {
   useEffect(() => {
     if (!batchDetails) return;
     let cancelled = false;
-    const update = () => api('files/' + batchDetails).then(rows => { if (!cancelled) setFileDetails(rows); }).catch(() => {});
+    const update = singleFlight(() => api('files/' + batchDetails).then(rows => { if (!cancelled) setFileDetails(rows); }).catch(() => {}));
     update();
-    const timer = setInterval(update, 10000);
-    return () => { cancelled = true; clearInterval(timer); };
+    const stop = pollAfterCompletion(update, 10000, () => document.visibilityState === 'visible');
+    return () => { cancelled = true; stop(); };
   }, [batchDetails]);
   useEffect(() => {
     if (!data) return;
-    const timer = setInterval(() => { if (document.visibilityState === 'visible') refresh().catch(() => {}); }, 10000);
-    return () => clearInterval(timer);
+    let cancelled = false;
+    const stop = pollAfterCompletion(async () => {
+      const status = await api('activity');
+      if (cancelled) return;
+      if (status.revision !== loadedRevision.current) await refresh();
+      else setData((previous: any) => previous ? { ...previous, jobs: status.jobs, worker: status.worker,
+        summary: { ...previous.summary, batches: status.batches } } : previous);
+    }, 10000, () => document.visibilityState === 'visible');
+    return () => { cancelled = true; stop(); };
   }, [!!data, refresh]);
   const registerRef = useRef({ runResearch, navigate, setQuestion, setSpec });
   registerRef.current = { runResearch, navigate, setQuestion, setSpec };
@@ -547,7 +557,14 @@ export default function Studio() {
             </div>
           ) : (
             <>
-              {view === 'discover' && (
+              {!s.ready && <section className="panel" role="status">
+                <h2>Summary needs preparation</h2>
+                <p>Your imported records are preserved. The worker will prepare saved totals in bounded pages; opening this page does not scan the crash database.</p>
+                <p>Start a discovery scan, or use Retry job in the Data library if the previous scan failed. Counts and research controls will appear when the summary is ready.</p>
+                <Button variant="outline" onClick={() => navigate('data')}>View job progress</Button>{' '}
+                <Button disabled={!!busy} onClick={scan}>Prepare summary and scan</Button>
+              </section>}
+              {view === 'discover' && s.ready && (
                 <>
                   <div className="page-heading">
                     <div>
@@ -746,7 +763,7 @@ export default function Studio() {
                   </p>
                 </>
               )}
-              {view === 'research' && (
+              {view === 'research' && s.ready && (
                 <>
                   <div className="page-heading">
                     <div>
@@ -1418,7 +1435,7 @@ export default function Studio() {
                     <h3>Coverage & quality</h3>
                     <div className="mini-metrics">
                       <div>
-                        <strong>{number(s.crashes - s.located)}</strong>
+                        <strong>{s.ready ? number(s.crashes - s.located) : 'Pending summary'}</strong>
                         <span>Crashes without usable coordinates</span>
                       </div>
                       <div>
@@ -1426,7 +1443,7 @@ export default function Studio() {
                         <span>Calendar months covered in full</span>
                       </div>
                       <div>
-                        <strong>{number(s.deaths)}</strong>
+                        <strong>{s.ready ? number(s.deaths) : 'Pending summary'}</strong>
                         <span>Deaths recorded (people, not crashes)</span>
                       </div>
                     </div>

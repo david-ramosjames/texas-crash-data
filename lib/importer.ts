@@ -341,6 +341,8 @@ export async function activate(id: string) {
     id,
   );
   await db().batch([
+    // Invalidate cached analytics atomically with the active revision switch.
+    db().prepare("INSERT INTO settings(key,value) VALUES('summary_generation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(crypto.randomUUID()),
     db()
       .prepare(
         'INSERT INTO current_crashes(id,batch_id,extraction) SELECT id,?,? FROM crashes WHERE batch_id=? ON CONFLICT(id) DO UPDATE SET batch_id=excluded.batch_id,extraction=excluded.extraction WHERE excluded.extraction>current_crashes.extraction',

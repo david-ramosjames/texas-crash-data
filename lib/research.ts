@@ -1,4 +1,5 @@
 import { all, first } from './db';
+import { buildSummary, cachedSummary, emptySummary } from './summary-cache';
 import { COHORTS, GROUPS, Spec, Evidence, ResultRow } from './contracts';
 
 export const BASE =
@@ -119,25 +120,19 @@ export function compile(s: Spec) {
 }
 export type QueryProgress = (stage: string) => Promise<void>;
 const noProgress: QueryProgress = async () => {};
-export async function summary(progress: QueryProgress = noProgress) {
-  await progress('Summary: counting loaded crashes');
-  const stats = await first<any>(
-    `SELECT COUNT(*) crashes,MIN(c.date) start,MAX(c.date) "end",COALESCE(SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END),0) severe,COALESCE(SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END),0) fatal,COALESCE(SUM(cmv),0) cmv,COUNT(latitude) located,COALESCE(SUM(deaths),0) deaths ${BASE}`,
-  );
+export async function sourceBatches() {
+  return all<any>(`SELECT b.id,b.extraction,b.start,b."end",b.status,b.created,b.activated,b.error,
+    j.status job_status,j.progress job_progress,j.error job_error
+    FROM batches b LEFT JOIN jobs j ON j.batch_id=b.id AND j.kind='import' ORDER BY b.created DESC`);
+}
+export async function summary(progress: QueryProgress = noProgress, options: { cachedOnly?: boolean } = {}) {
+  const stats = options.cachedOnly ? (await cachedSummary()).value : await buildSummary(progress);
   await progress('Summary: checking source coverage');
-  const batches = await all<any>(
-    `SELECT b.id,b.extraction,b.start,b."end",b.status,b.created,b.activated,b.error,
-      j.status job_status,j.progress job_progress,j.error job_error
-      FROM batches b LEFT JOIN jobs j ON j.batch_id=b.id AND j.kind='import' ORDER BY b.created DESC`,
-  );
-  await progress('Summary: listing loaded cities');
-  const cities = await all<{ city: string }>(
-    `SELECT DISTINCT city ${BASE} ORDER BY city`,
-  );
+  const batches = await sourceBatches();
   return {
-    ...stats,
+    ...(stats || emptySummary()),
+    ready: !!stats || !batches.some(b => b.status === 'complete'),
     batches,
-    cities: cities.map((x) => x.city),
     completeMonths: completeMonths(
       batches.filter((x) => x.status === 'complete'),
     ),

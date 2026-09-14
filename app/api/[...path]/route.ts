@@ -23,6 +23,7 @@ import { escapeHTML } from '@/lib/export';
 import { zip } from '@/lib/zip';
 import { aiInterpret, aiWrite } from '@/lib/ai';
 import { requestFailure } from '@/lib/errors';
+import { activity } from '@/lib/activity';
 export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
   Response.json(body, {
@@ -162,17 +163,20 @@ async function handler(
           },
         });
       }
+      if (area === 'activity') return json(await activity());
       if (area === 'bootstrap') {
+        // Capture the revision first. A completion during bootstrap will then
+        // cause the next activity poll to load the newer dashboard once.
+        const status = await activity();
         const [s, findings, drafts, domains, settings] = await Promise.all([
-          summary(),
+          summary(undefined, { cachedOnly: true }),
           all<any>('SELECT * FROM findings ORDER BY score DESC'),
           all<any>('SELECT * FROM drafts ORDER BY updated DESC'),
           all<any>('SELECT * FROM domains ORDER BY name'),
-          all<any>('SELECT * FROM settings'),
+          all<any>("SELECT * FROM settings WHERE key NOT IN ('summary_cache','summary_generation','summary_cached_generation')"),
         ]);
         return json({
-          jobs: await all('SELECT * FROM jobs ORDER BY created DESC LIMIT 40'),
-          worker: await first('SELECT heartbeat,job_id,(heartbeat>now()-interval \'60 seconds\') online FROM worker_health ORDER BY heartbeat DESC LIMIT 1'),
+          ...status,
           summary: s,
           findings: findings.map((x) => ({
             ...x,
@@ -253,7 +257,8 @@ async function handler(
         const { question } = await body();
         if (typeof question !== 'string' || question.length > 2000)
           throw new Error('Use a question of 2,000 characters or fewer.');
-        const s = await summary();
+        const s = await summary(undefined, { cachedOnly: true });
+        if (!s.ready) throw new Error('The worker needs to prepare the summary. Start or retry discovery in the Data library.');
         if (!s.crashes) throw new Error('Import your data first.');
         if (runtime().OPENAI_API_KEY)
           return json(await aiInterpret(question, s));

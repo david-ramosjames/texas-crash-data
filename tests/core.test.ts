@@ -105,7 +105,7 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
   await t.test('discovery preserves human editorial decisions and produces backed findings',async()=>{
     const phases:string[]=[];
     const result=await discover(async phase=>{phases.push(phase);});assert(result.created>0);assert.equal(result.comparisons,0);
-    assert.equal(phases[0],'Summary: counting loaded crashes');
+    assert.match(phases[0],/^Summary:/);
     assert(phases.includes('Selecting city cohorts · Ranking groups'));
     assert(phases.some(p=>/^Question 1\/\d+: all by city · Ranking groups$/.test(p)));
     assert(phases.some(p=>/^Question 1\/\d+: all by city · Saving finding$/.test(p)));
@@ -132,6 +132,20 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     assert.equal(await claimJob(),null);
     const terminal=await first<any>('SELECT status,error FROM jobs WHERE id=?',j.id);
     assert.equal(terminal.status,'failed');assert.equal(terminal.error,diagnostic);
+  });
+  await t.test('newer activation invalidates saved totals atomically; duplicates keep the cache',async()=>{
+    assert.equal((await summary()).fatal,5);
+    const newer=await makeBatch('20270828124847');
+    await storeRows(newer.id,'crash',{number:0,rows:[{...crashes[0],city:'AUSTIN',severity:3,deaths:0}]});
+    await storeRows(newer.id,'unit',{number:0,rows:units.filter(u=>u.crash_id===crashes[0].id)});
+    await storeRows(newer.id,'lookup',{number:0,rows:[{column:'x',code:'1',description:'x'}]});
+    await run('UPDATE files SET parsed=1 WHERE batch_id=?',newer.id);
+    await activate(newer.id);
+    assert.equal((await summary(undefined,{cachedOnly:true})).ready,false);
+    const updated=await summary();assert.equal(updated.crashes,36);assert.equal(updated.fatal,4);
+    assert(updated.cities.includes('AUSTIN'));
+    await activate(newer.id);
+    assert.equal((await summary(undefined,{cachedOnly:true})).ready,true);
   });
  }); } finally { await pg.close(); }
 });

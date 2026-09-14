@@ -25,6 +25,8 @@ npm run worker
 2. In **Data library**, choose a folder or all original CSVs. Several complete extraction batches can be selected together. Unzip downloads first. Each batch must have all nine file types and retain its TxDOT filenames.
 3. Keep the tab open until file transfer finishes. Then close it if you want: the worker validates and activates each complete batch, then scans the available history. Re-select identical files to resume an interrupted transfer.
 4. Check the persistent **Activity inbox** for progress, failures, retries, and discovery results. The worker status detects missing/stopped workers. This is an in-app notification inbox, not an email delivery integration.
+5. Review **Discover** findings, or ask in **Research**. English questions produce an explicit filter plan for review before execution. AI cannot run arbitrary SQL. Unsupported filters are rejected rather than silently invented.
+6. Create a page, newsletter, or social draft. Edit, verify the evidence, and approve. Public exports require approval. Configure each publication's domain, brand, and byline. Download its static-site ZIP and deploy it on your chosen host; the studio does not change DNS or automatically publish.
 
 ### Diagnosing a failed discovery scan
 
@@ -33,8 +35,16 @@ The inbox shows the job ID, attempt count, updated time, and current question/qu
 The Railway **worker** logs `Research job failed.` with `jobId`, `kind`, `attempt`, `phase`, and a safe `code` before trying to save the error. If the database also rejects that write, the original failure code remains in the logs. Driver messages, SQL, credentials, and row contents are not logged. For example, `57014` means a query was cancelled or timed out; `25006` means read-only; `53100` means disk full; `53200` means database memory exhausted. Inspect the actual code and stage before changing resources or timeouts.
 
 This diagnostic update needs no migration or new environment variables. Deploy the updated code to **both** the web and worker services, refresh Data library, and use **Retry job** if the discovery job is failed. Imported data and verified checkpoints are preserved.
-5. Review **Discover** findings, or ask in **Research**. English questions produce an explicit filter plan for review before execution. AI cannot run arbitrary SQL. Unsupported filters are rejected rather than silently invented.
-6. Create a page, newsletter, or social draft. Edit, verify the evidence, and approve. Public exports require approval. Configure each publication's domain, brand, and byline. Download its static-site ZIP and deploy it on your chosen host; the studio does not change DNS or automatically publish.
+
+### Summary cache and low-load polling
+
+The visible studio polls `/api/activity` about every 10 seconds **after the preceding request finishes**. This endpoint reads jobs, worker health, source-batch status, and small revision markers—not crash records or finding/draft evidence. Dashboard reloads are coalesced and happen after explicit actions or a data/scan revision change. Hidden tabs skip polling.
+
+Dashboard and language-interpreter requests only read saved summary totals. Discovery builds a missing summary on the worker using indexed pages of at most 10,000 active crash IDs, with a visible counted-record checkpoint. This is progress reporting, not a resumable summary checkpoint: an interrupted unfinished build starts again; an already saved valid summary is reused. The worker still reads the active history once to build a new summary. This does not eliminate the I/O cost of imports or discovery queries.
+
+Totals and city names are stored privately in `studio.settings`. Activation changes a generation marker in the same transaction as switching active crash revisions. Old totals are withheld until rebuilt; a build interrupted by a generation change is never published. No estimates or partial counts are shown as final statistics.
+
+For an existing installation, deploy **both web and worker**, refresh the studio, and **Retry job** on the failed discovery scan. Until it prepares the first cache, the studio shows **Summary needs preparation**, with Data library and job controls still available. New imports automatically queue discovery to refresh the summary. No re-upload, new migration, timeout increase, environment variable, or infrastructure purchase is required by this change. Exhausted disk I/O or later expensive discovery queries can still require additional tuning or compute capacity; this update does not guarantee completion on every instance size.
 
 ## Data safeguards
 
