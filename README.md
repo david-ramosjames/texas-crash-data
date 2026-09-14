@@ -80,6 +80,12 @@ Deploy both Railway services with the existing pre-deploy command `npm run db:mi
 
 Your existing 2022-onward history is sufficient to use these features; no 2020–2021 load is required. Supabase Storage holds originals while research reads private PostgreSQL tables under schema **studio**, not **public**. Person, primary-person, charges, damages, endorsements and restrictions are currently validated/archived, not fully indexed as research tables.
 
+## Body-type discovery recovery
+
+Body-type analysis now traverses current crash IDs in pages of at most 2,000 before joining vehicle and lookup records. Each successful page saves its group counts, crash totals, source batch IDs, and next cursor through the existing discovery checkpoints. Retries reuse saved pages; the first 23 completed questions remain compatible. Final minimum counts and top-N limits apply only after all pages are combined. Multiple vehicles or body codes with the same label still count once per crash, and superseded crash versions remain excluded.
+
+After the worker deploys, use **Retry job** on the existing failed discovery job. No migration, environment change, re-upload, or checkpoint reset is required. Progress shows **Body types · page N · X crashes checked**. Bounded work reduces the size of each query but does not eliminate database I/O limits or guarantee production runtime. Non-body research is unchanged.
+
 ## Data safeguards
 
 - Original file chunks live in a private Supabase bucket, addressed by SHA-256. They never ship in the app or GitHub repository. Worker reads verify checksums.

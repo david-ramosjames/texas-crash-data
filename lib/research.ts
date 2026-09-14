@@ -84,7 +84,7 @@ export function validateSpec(input: unknown): Spec {
   }
   return result;
 }
-export function compile(s: Spec) {
+export function compile(s: Spec, boundedBodyPage = false) {
   const clauses = ['c.date>=?', 'c.date<=?'];
   const args: unknown[] = [s.start, s.end];
   for (const field of ['city', 'county','road','weather','light','rural'] as const) {
@@ -104,7 +104,7 @@ export function compile(s: Spec) {
       unitArgs.push(s[field]);
     }
   for(const [key,op] of [['yearMin','>='],['yearMax','<=']] as const) if(s[key]!==undefined){unitClauses.push(`u.year${op}?`);args.push(s[key]);unitArgs.push(s[key]);}
-  if(unitClauses.length) clauses.push(`EXISTS (SELECT 1 FROM units u WHERE u.batch_id=c.batch_id AND u.crash_id=c.id AND ${unitClauses.join(' AND ')})`);
+  if(unitClauses.length) clauses.push(`EXISTS (SELECT 1 FROM units u WHERE u.batch_id=c.batch_id AND u.crash_id=c.id AND ${unitClauses.join(' AND ')}${boundedBodyPage ? ' OFFSET 0' : ''})`);
   if(s.radiusMeters !== undefined) {
     clauses.push('ST_DWithin(c.location,ST_SetSRID(ST_MakePoint(?::double precision,?::double precision),4326)::geography,?::double precision)');
     args.push(s.longitude,s.latitude,s.radiusMeters);
@@ -126,16 +126,22 @@ export function compile(s: Spec) {
   };
   const unitGroup = ['make', 'color', 'body'].includes(s.group);
   const join = unitGroup
-    ? ' JOIN units u ON u.batch_id=c.batch_id AND u.crash_id=c.id' + (s.group === 'body'
-      ? " LEFT JOIN lookups body_lookup ON body_lookup.batch_id=c.batch_id AND body_lookup.column='VEH_BODY_STYL_ID' AND body_lookup.code=CAST(u.body AS TEXT)"
+    ? (boundedBodyPage
+      ? ' JOIN LATERAL (SELECT * FROM units page_unit WHERE page_unit.batch_id=c.batch_id AND page_unit.crash_id=c.id OFFSET 0) u ON true'
+      : ' JOIN units u ON u.batch_id=c.batch_id AND u.crash_id=c.id') + (s.group === 'body'
+      ? (boundedBodyPage
+        ? " LEFT JOIN LATERAL (SELECT description FROM lookups l WHERE l.batch_id=c.batch_id AND l.column='VEH_BODY_STYL_ID' AND l.code=CAST(u.body AS TEXT) OFFSET 0) body_lookup ON true"
+        : " LEFT JOIN lookups body_lookup ON body_lookup.batch_id=c.batch_id AND body_lookup.column='VEH_BODY_STYL_ID' AND body_lookup.code=CAST(u.body AS TEXT)")
       : '')
     : '';
   const cohortUnits = unitGroup && unitClauses.length ? ` AND ${unitClauses.join(' AND ')}` : '';
   const extra = s.group === 'intersection' ? " AND c.intersection<>''" : '';
   const where = `WHERE ${clauses.join(' AND ')}`;
-  const sql = `WITH matched AS (SELECT DISTINCT c.id,c.batch_id,c.severity,c.deaths,c.serious,${dimensions[s.group]} AS label ${BASE}${join} ${where}${extra}${cohortUnits}) SELECT label,COUNT(*) AS crashes,SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END) AS severe,SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END) AS fatal,SUM(deaths) AS deaths,SUM(serious) AS serious FROM matched GROUP BY label HAVING COUNT(*)>=? ORDER BY ${s.metric} DESC,crashes DESC,label LIMIT ?`;
+  const aggregateSql = `WITH matched AS (SELECT DISTINCT c.id,c.batch_id,c.severity,c.deaths,c.serious,${dimensions[s.group]} AS label ${boundedBodyPage ? 'FROM filtered c' : BASE}${join} ${boundedBodyPage ? 'WHERE true' : where}${extra}${cohortUnits}) SELECT label,COUNT(*) AS crashes,SUM(CASE WHEN severity IN (1,4) THEN 1 ELSE 0 END) AS severe,SUM(CASE WHEN severity=4 THEN 1 ELSE 0 END) AS fatal,SUM(deaths) AS deaths,SUM(serious) AS serious FROM matched GROUP BY label`;
+  const sql = `${aggregateSql} HAVING COUNT(*)>=? ORDER BY ${s.metric} DESC,crashes DESC,label LIMIT ?`;
   const groupArgs = unitGroup ? unitArgs : [];
-  return { sql, args: [...args, ...groupArgs, s.min, s.limit], where, filterArgs: args };
+  const aggregateArgs = [...(boundedBodyPage ? [] : args), ...groupArgs];
+  return { sql, args: [...aggregateArgs, s.min, s.limit], aggregateSql, aggregateArgs, where, filterArgs: args };
 }
 export type QueryProgress = (stage: string) => Promise<void>;
 export type ResearchStage = <T>(stage: string, task: () => Promise<T>) => Promise<T>;
@@ -218,14 +224,20 @@ export async function research(spec: Spec, progress: QueryProgress = noProgress,
   // Workers bind research to one lock-owning client. Await each query so no
   // queued query outlives a rejection or overlaps the next attempt/transaction.
   await progress('Ranking groups');
-  const rows = await stage('ranking', () => all<ResultRow>(q.sql, ...q.args));
+  const body = spec.group === 'body'
+    ? await stage('body-analysis-v1', async () => {
+        const { bodyAnalysis } = await import('./body-research');
+        return bodyAnalysis(spec, progress, stage);
+      })
+    : undefined;
+  const rows = body ? body.rows : await stage('ranking', () => all<ResultRow>(q.sql, ...q.args));
   await progress('Counting matching crashes');
-  const totals = await stage('totals', () => first<any>(
+  const totals = body ? body.totals : await stage('totals', () => first<any>(
       `SELECT COUNT(*) total,COUNT(*) FILTER (WHERE c.severity IN (1,4)) severe,COUNT(*) FILTER (WHERE c.severity=4) fatal,COUNT(*) FILTER (WHERE c.latitude IS NULL) unlocated,COUNT(*) FILTER (WHERE c.intersection='') no_intersection ${BASE} ${q.where}`,
       ...q.filterArgs,
     ));
   await progress('Checking source batches');
-  const sources = await stage('sources', () => all<any>(
+  const sources = body ? body.sources : await stage('sources', () => all<any>(
       `SELECT DISTINCT b.id,b.extraction,b.start,b."end" ${BASE} JOIN batches b ON b.id=c.batch_id ${q.where}`,
       ...q.filterArgs,
     ));
@@ -275,7 +287,7 @@ export async function research(spec: Spec, progress: QueryProgress = noProgress,
     warnings,
     sources,
     generated: new Date().toISOString(),
-    engine: 'Validated SQL · distinct crashes',
+    engine: body ? 'Validated SQL · distinct crashes · checkpointed body-type pages' : 'Validated SQL · distinct crashes',
     sql: q.sql,
     parameters: q.args,
   };

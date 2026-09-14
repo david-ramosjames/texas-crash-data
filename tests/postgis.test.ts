@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import pg from 'pg';
 import { withConnection, all, first, run } from '../lib/db';
 import { compile, research, validateSpec } from '../lib/research';
+import { bodyAnalysis } from '../lib/body-research';
 import { applyIndexMigration } from '../lib/index-migration';
 import { readFile } from 'node:fs/promises';
 test('native PostgreSQL: PostGIS generated points, radius queries, privacy grants and worker locks',{skip:!process.env.TEST_DATABASE_URL},async()=>{
@@ -48,6 +49,19 @@ test('native PostgreSQL: PostGIS generated points, radius queries, privacy grant
    const bodyQuery=compile(bodySpec);
    const plan=await all('EXPLAIN (FORMAT JSON) '+bodyQuery.sql,...bodyQuery.args);
    assert(!JSON.stringify(plan).includes('SubPlan'), 'Body labels must use the set-based lookup join');
+   let pageQuery: { sql: string; args?: any[] } | undefined;
+   const bounded = await withConnection({ query: async (sql: string, args?: any[]) => {
+     if (sql.startsWith('WITH crash_page')) pageQuery = { sql, args };
+     return a.query(sql,args);
+   } }, () => bodyAnalysis(validateSpec({...bodySpec,make:'FORD',color:'WHITE',latitude:32.78,longitude:-96.8,radiusMeters:500}),async()=>{},async(_key,task)=>task(),2));
+   assert.equal(bounded.rows[0].crashes,1);assert.equal(bounded.totals.total,1);
+   assert(pageQuery);
+   await a.query('SET LOCAL enable_seqscan=off');
+   const boundedPlan=await a.query('EXPLAIN (FORMAT JSON) '+pageQuery.sql,pageQuery.args);
+   const planText=JSON.stringify(boundedPlan.rows);
+   assert.match(planText,/current_crashes_pkey/);assert.match(planText,/crashes_pkey/);assert.match(planText,/units_pkey/);assert.match(planText,/lookups_pkey/);
+   assert.match(planText,/Limit/);
+   await a.query('SET LOCAL enable_seqscan=on');
   });
   await a.query('ROLLBACK');
  } finally {a.release();b.release();await pool.end();}
