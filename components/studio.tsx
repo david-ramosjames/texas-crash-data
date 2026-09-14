@@ -1332,7 +1332,7 @@ export default function Studio() {
                         <p>{job.progress}</p>{job.batch_id && <p className="fine-print">{job.batch_id}</p>}
                         <p className="fine-print">Job <code>{job.id}</code> · Attempt {job.attempts}/5{job.updated && ` · Updated ${new Date(job.updated).toLocaleString()}`}</p>
                         {job.error && <p role="status"><strong>Last failure:</strong> {job.error}</p>}
-                        {result && job.kind==='discover' && <p>{result.created} new findings · {result.refreshed} refreshed · {result.probes} questions tested. {result.aiError && `AI assistance: ${result.aiError}`}</p>}
+                        {result && job.kind==='discover' && <p>{result.created} new findings · {result.refreshed} refreshed · {result.probes} questions tested. {result.resumed > 0 && `${result.resumed} completed questions reused. `}{result.aiError && `AI assistance: ${result.aiError}`}</p>}
                         {job.status==='failed' && <Button variant="outline" disabled={!!busy} onClick={()=>action('Retrying',async()=>{await api(`jobs/${job.id}/retry`,{});await refresh();})}>Retry job</Button>}
                       </div>;
                     })}

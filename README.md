@@ -34,7 +34,7 @@ The inbox shows the job ID, attempt count, updated time, and current question/qu
 
 The Railway **worker** logs `Research job failed.` with `jobId`, `kind`, `attempt`, `phase`, and a safe `code` before trying to save the error. If the database also rejects that write, the original failure code remains in the logs. Driver messages, SQL, credentials, and row contents are not logged. For example, `57014` means a query was cancelled or timed out; `25006` means read-only; `53100` means disk full; `53200` means database memory exhausted. Inspect the actual code and stage before changing resources or timeouts.
 
-This diagnostic update needs no migration or new environment variables. Deploy the updated code to **both** the web and worker services, refresh Data library, and use **Retry job** if the discovery job is failed. Imported data and verified checkpoints are preserved.
+Deploy the updated code to **both** the web and worker services, with `npm run db:migrate` in the pre-deploy commands. Refresh Data library and use **Retry job** if the discovery job is failed. Imported data and verified checkpoints are preserved.
 
 ### Summary cache and low-load polling
 
@@ -44,7 +44,17 @@ Dashboard and language-interpreter requests only read saved summary totals. Disc
 
 Totals and city names are stored privately in `studio.settings`. Activation changes a generation marker in the same transaction as switching active crash revisions. Old totals are withheld until rebuilt; a build interrupted by a generation change is never published. No estimates or partial counts are shown as final statistics.
 
-For an existing installation, deploy **both web and worker**, refresh the studio, and **Retry job** on the failed discovery scan. Until it prepares the first cache, the studio shows **Summary needs preparation**, with Data library and job controls still available. New imports automatically queue discovery to refresh the summary. No re-upload, new migration, timeout increase, environment variable, or infrastructure purchase is required by this change. Exhausted disk I/O or later expensive discovery queries can still require additional tuning or compute capacity; this update does not guarantee completion on every instance size.
+For an existing installation, deploy **both web and worker**, refresh the studio, and **Retry job** on the failed discovery scan. Until it prepares the first cache, the studio shows **Summary needs preparation**, with Data library and job controls still available. New imports automatically queue discovery to refresh the summary. No re-upload, timeout increase, environment variable, or infrastructure purchase is required. Exhausted disk I/O or later expensive discovery queries can still require additional tuning or compute capacity; this update does not guarantee completion on every instance size.
+
+### Resumable discovery questions
+
+Migration `004_discovery_checkpoints.sql` adds a private, RLS-protected checkpoint table. Railway's existing pre-deploy `npm run db:migrate` applies it before the new worker starts. If you do not use those pre-deploy commands, run the migration command before starting the updated worker.
+
+Completed analysis results and completed questions (including questions with no qualifying finding) are recorded by job ID, imported-data generation, algorithm version, and exact query inputs. Finding writes and their completion marker commit together. Automatic and manual retries reuse these checkpoints without repeating completed queries or overwriting later editorial decisions. A new scan, new imported-data generation, or algorithm-version change does not reuse an incompatible checkpoint. Successful completion still requires all planned deterministic and comparison queries; SQL failures in AI-proposed questions also fail the job. Failure of the optional idea-proposal service itself is reported separately as AI assistance unavailable.
+
+The first run after upgrading cannot reuse work from the older version, because it never wrote these checkpoints. Use **Retry job** to continue the same failed job; **Scan for findings** starts a new scan and therefore does not reuse another job's checkpoints. Progress labels show **Already complete** or **Reusing verified result** during a retry. Counts in the final result include completed work from earlier attempts.
+
+Body-style rankings use a batch-specific lookup join instead of a per-vehicle correlated subquery. The lookup's primary key keeps that join one-to-one. Distinct-crash counting by displayed label, missing-code behavior, vehicle filters, and source-specific descriptions are preserved. This is a query optimization, not a change to the definition of a truck or to reported crash counts.
 
 ## Data safeguards
 

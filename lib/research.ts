@@ -105,11 +105,13 @@ export function compile(s: Spec) {
     light: 'c.light',
     make: 'u.make',
     color: 'u.color',
-    body: "COALESCE((SELECT description FROM lookups l WHERE l.batch_id=c.batch_id AND l.column='VEH_BODY_STYL_ID' AND l.code=CAST(u.body AS TEXT)),'Not recorded')",
+    body: "COALESCE(body_lookup.description,'Not recorded')",
   };
   const unitGroup = ['make', 'color', 'body'].includes(s.group);
   const join = unitGroup
-    ? ' JOIN units u ON u.batch_id=c.batch_id AND u.crash_id=c.id'
+    ? ' JOIN units u ON u.batch_id=c.batch_id AND u.crash_id=c.id' + (s.group === 'body'
+      ? " LEFT JOIN lookups body_lookup ON body_lookup.batch_id=c.batch_id AND body_lookup.column='VEH_BODY_STYL_ID' AND body_lookup.code=CAST(u.body AS TEXT)"
+      : '')
     : '';
   const cohortUnits = unitGroup && unitClauses.length ? ` AND ${unitClauses.join(' AND ')}` : '';
   const extra = s.group === 'intersection' ? " AND c.intersection<>''" : '';

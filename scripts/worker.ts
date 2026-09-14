@@ -37,7 +37,7 @@ while (!stopping) {
           phase = text;
           await run('UPDATE jobs SET progress=?,updated=now() WHERE id=?',text,job.id);
         };
-        const result = job.kind === 'import' ? await processImport(job.batch_id,progress) : await discover(progress);
+        const result = job.kind === 'import' ? await processImport(job.batch_id,progress) : await discover(progress, job.id);
         await progress('Saving completed job');
         await transaction(async () => {
           await run("UPDATE jobs SET status='complete',result=?,error=NULL,progress='Complete',updated=now(),finished=now() WHERE id=?",JSON.stringify(result),job.id);

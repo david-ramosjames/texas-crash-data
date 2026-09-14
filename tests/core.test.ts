@@ -10,6 +10,7 @@ import { beginImport, storeRows, activate } from '../lib/importer';
 import { queueImport, enqueueDiscovery, claimJob, failJob, retryJob } from '../lib/jobs';
 import { FILE_TYPES, GROUPS, COHORTS } from '../lib/contracts';
 import { discover } from '../lib/discovery';
+import { discoveryCheckpoints } from '../lib/discovery-checkpoints';
 import { allowedUser, sameOrigin } from '../lib/auth';
 
 test('RFC4180 parser preserves identifiers and handles all chunk boundaries',async()=>{
@@ -49,6 +50,7 @@ test('export escapes markup and spreadsheet formulas',()=>{
 test('PostgreSQL ingestion, revision precedence, jobs, discovery and all research dimensions',async(t)=>{
  const pg = new PGlite();
  await pg.exec(await readFile(new URL('../migrations/001_core.sql',import.meta.url),'utf8'));
+ await pg.exec(await readFile(new URL('../migrations/004_discovery_checkpoints.sql',import.meta.url),'utf8'));
  const connection={query:async(sql:string,args?:any[])=>{const r=await pg.query(sql,args);return {...r,rowCount:r.affectedRows};}};
  try { await withConnection(connection,async()=>{
   const makeBatch=async(extraction:string,start='20241210',end='20241231')=>{
@@ -133,6 +135,81 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     const terminal=await first<any>('SELECT status,error FROM jobs WHERE id=?',j.id);
     assert.equal(terminal.status,'failed');assert.equal(terminal.error,diagnostic);
   });
+  await t.test('body-style join preserves correlated-lookup results and exact vehicle filtering',async()=>{
+    // Different codes may share a description; multiple vehicles in a crash
+    // must still count only once per displayed body-style label.
+    await run("INSERT INTO lookups VALUES(?, 'VEH_BODY_STYL_ID','87','TRUCK')",b.id);
+    await run("INSERT INTO lookups SELECT id,'VEH_BODY_STYL_ID','106','OTHER BATCH DESCRIPTION' FROM batches WHERE id<>?",b.id);
+    await run("INSERT INTO units SELECT batch_id,crash_id,'3',kind,87,make,model,color,year,cmv,factor FROM units WHERE batch_id=? AND crash_id=? AND number='1'",b.id,crashes[0].id);
+    await run("INSERT INTO units SELECT batch_id,crash_id,'4',kind,NULL,make,model,color,year,cmv,factor FROM units WHERE batch_id=? AND crash_id=? AND number='1'",b.id,crashes[0].id);
+    await run("INSERT INTO units SELECT batch_id,crash_id,'5',kind,999,make,model,color,year,cmv,factor FROM units WHERE batch_id=? AND crash_id=? AND number='1'",b.id,crashes[0].id);
+    for(const filter of [{},{cohort:'truck'},{make:'FORD',color:'WHITE'},{make:'CHEVROLET'},{make:'absent'}]) {
+      const spec=validateSpec({cohort:'all',group:'body',metric:'crashes',start:'2024-12-10',end:'2024-12-31',min:1,limit:10,...filter});
+      const q=compile(spec);
+      assert(!q.sql.includes('SELECT description FROM lookups'));
+      const oldSQL=q.sql.replace("COALESCE(body_lookup.description,'Not recorded')", "COALESCE((SELECT description FROM lookups l WHERE l.batch_id=c.batch_id AND l.column='VEH_BODY_STYL_ID' AND l.code=CAST(u.body AS TEXT)),'Not recorded')")
+        .replace(" LEFT JOIN lookups body_lookup ON body_lookup.batch_id=c.batch_id AND body_lookup.column='VEH_BODY_STYL_ID' AND body_lookup.code=CAST(u.body AS TEXT)",'');
+      assert.deepEqual(await all(q.sql,...q.args),await all(oldSQL,...q.args));
+    }
+    const rows=await research(validateSpec({group:'body',start:'2024-12-10',end:'2024-12-31',min:1,limit:10}));
+    assert.equal(rows.rows.find(r=>r.label==='TRUCK')?.crashes,36);
+    assert.equal(rows.rows.find(r=>r.label==='Not recorded')?.crashes,1);
+  });
+  let checkpointJobId:string;
+  await t.test('timeout on question 24 resumes there without repeating the first 23 questions',async()=>{
+    const job=await enqueueDiscovery();checkpointJobId=job.id;await claimJob();
+    const timeout=Object.assign(new Error('synthetic timeout'),{code:'57014'});
+    await assert.rejects(()=>withConnection({query:async(sql:string,args?:any[])=>{
+      if(sql.includes('WITH matched') && sql.includes('body_lookup'))throw timeout;
+      return connection.query(sql,args);
+    }},()=>discover(async()=>{},job.id)),timeout);
+    const cp=await discoveryCheckpoints(job.id);
+    assert.equal(await cp.read('probe',{cohort:'all',group:'body',metric:'crashes',category:'Conditions & patterns',start:'2024-12-10',end:'2024-12-10',min:10,limit:10}),null);
+    // Mimic worker failure and explicit retry; checkpoints must survive both.
+    await failJob({...job,attempts:5},'At Question 24/27. [code: 57014]');
+    await run("UPDATE findings SET title='Human-edited title',status='approved' WHERE id='finding-all-city-severe'");
+    await retryJob(job.id);await claimJob();
+    const phases:string[]=[],queries:string[]=[];
+    const result=await withConnection({query:async(sql:string,args?:any[])=>{
+      if(sql.includes('WITH matched'))queries.push(sql);
+      return connection.query(sql,args);
+    }},()=>discover(async p=>{phases.push(p);},job.id));
+    assert.equal(result.resumed,23);assert.equal(result.probes,27);
+    assert(phases.includes('Question 24/27: all by body · Ranking groups'));
+    assert(!phases.some(p=>/^Question (?:[1-9]|1\d|2[0-3])\/27:.*Ranking groups$/.test(p)));
+    assert.equal(queries.length,4);
+    assert.equal((await first<any>("SELECT title FROM findings WHERE id='finding-all-city-severe'")).title,'Human-edited title');
+    assert.equal((await first<any>("SELECT status FROM findings WHERE id='finding-all-city-severe'")).status,'approved');
+    const replay=await discover(async()=>{},job.id);
+    assert.equal(replay.resumed,27);assert.equal(replay.created,result.created);assert.equal(replay.refreshed,result.refreshed);
+    await run("UPDATE jobs SET status='complete' WHERE id=?",job.id);
+  });
+  await t.test('checkpoint and finding writes roll back together, and input identity is canonical',async()=>{
+    const cp=await discoveryCheckpoints(checkpointJobId);
+    await assert.rejects(()=>cp.commit('rollback',{a:1,b:2},async()=>{
+      await run("INSERT INTO settings VALUES('checkpoint-rollback','test')");throw new Error('simulated save failure');
+    }),/simulated save/);
+    assert.equal(await first("SELECT * FROM settings WHERE key='checkpoint-rollback'"),null);
+    assert.equal(await cp.read('rollback',{a:1,b:2}),null);
+    await assert.rejects(()=>withConnection({query:async(sql:string,args?:any[])=>{
+      if(sql.startsWith('INSERT INTO discovery_checkpoints'))throw new Error('checkpoint storage failed');
+      return connection.query(sql,args);
+    }},()=>cp.commit('save-fails',{},async()=>{
+      await run("INSERT INTO settings VALUES('checkpoint-rollback','test')");return {created:1};
+    })),/checkpoint storage failed/);
+    assert.equal(await first("SELECT * FROM settings WHERE key='checkpoint-rollback'"),null);
+    assert.equal(await cp.read('save-fails',{}),null);
+    const saved={nested:{z:1,a:2},rows:[{label:'example',crashes:1}]};
+    await cp.query('canonical',{a:1,b:2},'test',async()=>{},async()=>saved);
+    const reused=await cp.query('canonical',{b:2,a:1},'test',async()=>{},async()=>{throw new Error('must reuse');});
+    assert.equal(JSON.stringify(reused),JSON.stringify(saved));
+    const other=await enqueueDiscovery();
+    assert.equal(await (await discoveryCheckpoints(other.id)).read('canonical',{a:1,b:2}),null);
+    await run("UPDATE jobs SET status='complete' WHERE id=?",other.id);
+    await run("UPDATE discovery_checkpoints SET version='old-code' WHERE job_id=?",checkpointJobId);
+    assert.equal(await cp.read('canonical',{a:1,b:2}),null);
+    await cp.query('current-generation',{},'test',async()=>{},async()=>saved);
+  });
   await t.test('newer activation invalidates saved totals atomically; duplicates keep the cache',async()=>{
     assert.equal((await summary()).fatal,5);
     const newer=await makeBatch('20270828124847');
@@ -141,6 +218,8 @@ test('PostgreSQL ingestion, revision precedence, jobs, discovery and all researc
     await storeRows(newer.id,'lookup',{number:0,rows:[{column:'x',code:'1',description:'x'}]});
     await run('UPDATE files SET parsed=1 WHERE batch_id=?',newer.id);
     await activate(newer.id);
+    const freshCheckpoints=await discoveryCheckpoints(checkpointJobId);
+    assert.equal(await freshCheckpoints.read('current-generation',{}),null);
     assert.equal((await summary(undefined,{cachedOnly:true})).ready,false);
     const updated=await summary();assert.equal(updated.crashes,36);assert.equal(updated.fatal,4);
     assert(updated.cities.includes('AUSTIN'));

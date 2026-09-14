@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import pg from 'pg';
-import { withConnection, first, run } from '../lib/db';
-import { research, validateSpec } from '../lib/research';
+import { withConnection, all, first, run } from '../lib/db';
+import { compile, research, validateSpec } from '../lib/research';
 test('native PostgreSQL: PostGIS generated points, radius queries, privacy grants and worker locks',{skip:!process.env.TEST_DATABASE_URL},async()=>{
  const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:'-c search_path=studio,extensions,public'});
  const a=await pool.connect(),b=await pool.connect();
@@ -25,6 +25,14 @@ test('native PostgreSQL: PostGIS generated points, radius queries, privacy grant
    const e=await research(validateSpec({cohort:'all',group:'city',metric:'crashes',start:'2024-01-01',end:'2024-01-31',latitude:32.78,longitude:-96.8,radiusMeters:500,min:1,limit:10}));
    assert.equal(e.total,1);assert.equal(e.rows[0].crashes,1);
    assert.equal((await first<any>("SELECT COUNT(location) n FROM crashes WHERE batch_id='geo-test'")).n,2);
+   await run("INSERT INTO lookups VALUES('geo-test','VEH_BODY_STYL_ID','106','TRUCK')");
+   for(const number of ['1','2']) await run("INSERT INTO units(batch_id,crash_id,number,kind,body,make,model,color,cmv,factor) VALUES('geo-test','1',?,1,106,'FORD','TEST','WHITE',1,'TEST')",number);
+   const bodySpec=validateSpec({cohort:'all',group:'body',metric:'crashes',start:'2024-01-01',end:'2024-01-31',min:1,limit:10});
+   const body=await research(bodySpec);
+   assert.equal(body.rows[0].label,'TRUCK');assert.equal(body.rows[0].crashes,1);
+   const bodyQuery=compile(bodySpec);
+   const plan=await all('EXPLAIN (FORMAT JSON) '+bodyQuery.sql,...bodyQuery.args);
+   assert(!JSON.stringify(plan).includes('SubPlan'), 'Body labels must use the set-based lookup join');
   });
   await a.query('ROLLBACK');
  } finally {a.release();b.release();await pool.end();}

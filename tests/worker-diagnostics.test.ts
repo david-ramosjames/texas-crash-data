@@ -79,7 +79,7 @@ test('uncoded validation text is private, never included in Railway failure logs
 
 test('worker passes progress to discovery, retains connection-bound writes and clears error on success', () => {
   const worker = readFileSync(new URL('../scripts/worker.ts', import.meta.url), 'utf8');
-  assert.match(worker, /await discover\(progress\)/);
+  assert.match(worker, /await discover\(progress, job.id\)/);
   assert.match(worker, /await reportJobFailure\(job, phase, error\)/);
   assert.match(worker, /status='complete',result=\?,error=NULL/);
   assert.match(worker, /withConnection\(client/);
