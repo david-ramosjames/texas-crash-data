@@ -87,6 +87,7 @@ import { uploadFiles, UploadProgress, validateResumeSelection } from '@/lib/uplo
 import { ImportRecovery, type RecoveryBatch } from '@/components/import-recovery';
 import { identify } from '@/lib/csv';
 import { EditorialAssets, PublicationPreview } from './editorial-assets';
+import { publicationTheme } from '@/lib/publication-profiles';
 import { headlineIdeas } from '@/lib/editorial';
 import { IdeasInbox } from './ideas-inbox';
 import { ExtraFilters, ComparisonFilter } from './research-fields';
@@ -1134,10 +1135,15 @@ export default function Studio() {
                           options={{
                             none: 'Choose a publication',
                             ...Object.fromEntries(
-                              domains.map((d) => [d.id, d.name]),
+                              domains.map((d) => [d.id, `${d.name} · ${d.host}`]),
                             ),
                           }}
                         />
+                        <div className="fine-print" role="status" aria-live="polite">
+                          <strong>{publicationTheme(domains.find((x) => x.id === draft.domain_id)).label}</strong>
+                          <p>{publicationTheme(domains.find((x) => x.id === draft.domain_id)).description}</p>
+                          <p>Page preview, HTML, charts and ZIP exports use this style. Your text, cover and evidence stay unchanged. Save the selection before exporting.</p>
+                        </div>
                         <div className="field">
                           <label htmlFor="slug">Page URL slug</label>
                           <Input
@@ -1499,7 +1505,8 @@ export default function Studio() {
                           <p className="fine-print">
                             Approved pages, branded index, sitemap, source
                             evidence, and data tables. Download and upload to
-                            that domain’s hosting.
+                            that domain’s hosting. For an existing site, integrate
+                            the article folders without replacing its homepage.
                           </p>
                           <div className="export-links">
                             {domains
@@ -1539,6 +1546,7 @@ export default function Studio() {
                             <div>
                               <h3>{d.name}</h3>
                               <p>{d.host}</p>
+                              <p className="fine-print">{publicationTheme(d).label}</p>
                               <span className="fine-print">
                                 {
                                   drafts.filter((x) => x.domain_id === d.id)
@@ -1571,6 +1579,11 @@ export default function Studio() {
                         {domain.id ? 'Edit publication' : 'Add a publication'}
                       </h2>
                       <div className="stack-fields">
+                        <div className="fine-print">
+                          <strong>{publicationTheme(domain).label}</strong>
+                          <p>{publicationTheme(domain).description}</p>
+                          <p>The template is selected automatically from the domain. Brand fonts use local fallbacks when unavailable; these are portable article layouts, not a live CMS connection.</p>
+                        </div>
                         {[
                           ['name', 'Publication name', 'Dallas Road Research'],
                           ['host', 'Domain', 'example.com'],

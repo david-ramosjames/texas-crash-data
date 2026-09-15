@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { standaloneArticle } from "../lib/editorial-package";
 import { BUILTIN_COVER, starterArticle } from "../lib/editorial";
 import type { Evidence, Draft } from "../lib/contracts";
+import { PUBLICATION_PROFILES } from "../lib/publication-profiles";
 const evidence: Evidence = {
   spec: {
     cohort: "truck",
@@ -56,16 +57,18 @@ const draft: Draft = {
   created: "2026-09-15",
   updated: "2026-09-15",
 };
-const html = await standaloneArticle(draft, {
-  id: "preview",
-  host: "example.com",
-  name: "SYNTHETIC DATA · LAYOUT TEST",
-  byline: "Preview only",
-  color: "#245bda",
-});
-createServer((_req, res) => {
+const pages = await Promise.all(
+  PUBLICATION_PROFILES.map(
+    async (domain) => [domain.host, await standaloneArticle(draft, domain)] as const,
+  ),
+);
+createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-  res.end(html);
+  const host = new URL(req.url || "/", "http://127.0.0.1:3210").pathname.slice(1);
+  res.end(
+    pages.find(([name]) => name === host)?.[1] ||
+      `<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Publication template previews</title></head><body style="font:18px/1.8 system-ui;max-width:800px;margin:60px auto;padding:24px"><h1>Publication template previews</h1><p>Synthetic layout examples only — not real crash findings.</p><ul>${PUBLICATION_PROFILES.map((p) => `<li><a href="/${p.host}">${p.name}</a>${p.host === "findaustinlawyer.com" ? " — provisional design" : ""}</li>`).join("")}</ul></body></html>`,
+  );
 }).listen(3210, "127.0.0.1", () =>
   console.log("Synthetic editorial preview: http://127.0.0.1:3210"),
 );

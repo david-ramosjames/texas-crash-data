@@ -20,6 +20,8 @@ import { coverBytes, coverPrompt, generateCover, queueCover, validateCover } fro
 import { reportJobFailure } from "../lib/worker-diagnostics";
 import { zip } from "../lib/zip";
 import { aiWrite } from "../lib/ai";
+import { PUBLICATION_PROFILES, publicationTheme } from "../lib/publication-profiles";
+import { renderPublicationIndex } from "../lib/publication-template";
 
 // Synthetic fixture, not a verified live query.
 export const evidence: Evidence = {
@@ -198,6 +200,123 @@ test("publication escapes text, keeps methods and stats, and renders determinist
       cover: { id: "evil", url: "javascript:alert(1)", alt: "x", caption: "x" },
     }).includes('src="javascript:'),
   );
+});
+test("publication templates switch without altering saved evidence, copy or cover", async () => {
+  const original = JSON.stringify(draft);
+  const keys = ["trucking-chicas", "ramos-james", "find-austin-lawyer"];
+  for (const [i, domain] of PUBLICATION_PROFILES.entries()) {
+    const html = renderPage(
+      {
+        ...draft,
+        cover: { id: "test", url: "cover.png", alt: "Illustrative truck", caption: "custom" },
+      },
+      domain,
+      true,
+    );
+    assert(html.includes(`data-publication="${keys[i]}"`));
+    assert(html.includes(`--brand:${domain.color}`));
+    assert(html.includes(domain.byline));
+    assert(html.includes(`https://${domain.host}/${draft.slug}/`));
+    assert(
+      html.includes('id="article"') &&
+        html.includes('id="statistics"') &&
+        html.includes('id="methods"'),
+    );
+    assert(html.includes("AI-generated illustration. Not a photograph"));
+    assert(html.includes('src="cover.png"'));
+    assert(
+      html.includes("Verified statistics") && html.includes("Methods, definitions and limitations"),
+    );
+    assert(html.includes("250") && html.includes("100") && html.includes("2022-01-01"));
+    assert(html.includes('name="robots" content="noindex,nofollow"'));
+    assert.equal(html.includes('class="template-warning"'), i === 2);
+    assert(renderChart(draft, domain).includes(`fill="${domain.color}"`));
+    const entries = await articleEntries(draft, domain);
+    assert(
+      entries.find((e) => e.name === "index.html")?.text?.includes(`data-publication="${keys[i]}"`),
+    );
+    assert(
+      entries.find((e) => e.name === "README.txt")?.text?.includes(publicationTheme(domain).label),
+    );
+    assert.equal(
+      entries.find((e) => e.name === "evidence.json")?.text,
+      JSON.stringify(draft.evidence, null, 2),
+    );
+    const index = renderPublicationIndex([draft], domain);
+    assert(index.includes(`data-publication="${keys[i]}"`));
+    assert(index.includes(`href="./${draft.slug}/"`));
+    assert(index.includes(draft.title));
+  }
+  assert.equal(JSON.stringify(draft), original);
+});
+test("publication styles accept only known hosts and safe color tokens", () => {
+  assert.equal(
+    publicationTheme({ host: "WWW.RAMOSJAMES.COM", color: "#123456" }).key,
+    "ramos-james",
+  );
+  assert.equal(
+    publicationTheme({
+      host: "ramosjames.com.attacker.test",
+      color: "red;}</style><script>bad</script>",
+    }).key,
+    "custom",
+  );
+  const malicious = {
+    id: "x",
+    host: "bad.test",
+    name: "<script>bad</script>",
+    byline: '<img onerror="bad">',
+    color: "</style><script>bad</script>",
+  };
+  const page = renderPage(draft, malicious),
+    index = renderPublicationIndex([draft], malicious);
+  for (const html of [page, index]) {
+    assert(!html.includes("<script>bad</script>"));
+    assert(html.includes("&lt;script&gt;bad&lt;/script&gt;"));
+    assert(html.includes("--brand:#245bda"));
+    assert(!html.includes("@import") && !html.includes("<script src="));
+  }
+});
+test("publication seed is idempotent and preserves an existing www profile and draft association", async () => {
+  const pg = new PGlite();
+  try {
+    await pg.exec(await readFile(new URL("../migrations/001_core.sql", import.meta.url), "utf8"));
+    await pg.exec(
+      "INSERT INTO studio.domains(id,name,host,byline,color) VALUES('existing-ramos','My custom name','www.ramosjames.com','Existing editor','#112233')",
+    );
+    await pg.query(
+      "INSERT INTO studio.drafts(id,title,slug,channel,body,evidence,created,updated,domain_id) VALUES('existing-draft','Preserve me','existing','page','Copy','{}','2026-09-15','2026-09-15','existing-ramos')",
+    );
+    const sql = await readFile(
+      new URL("../migrations/009_publication_profiles.sql", import.meta.url),
+      "utf8",
+    );
+    await pg.exec(sql);
+    await pg.exec(sql);
+    const profiles = (
+      await pg.query<{ id: string; host: string; color: string; name: string }>(
+        "SELECT * FROM studio.domains",
+      )
+    ).rows;
+    assert.equal(profiles.length, 3);
+    const existing = profiles.find((p) => p.id === "existing-ramos")!;
+    assert.equal(existing.name, "My custom name");
+    assert.equal(existing.color, "#112233");
+    assert.equal(publicationTheme(existing).key, "ramos-james");
+    assert.equal(
+      (
+        await pg.query<{ domain_id: string }>(
+          "SELECT domain_id FROM studio.drafts WHERE id='existing-draft'",
+        )
+      ).rows[0].domain_id,
+      "existing-ramos",
+    );
+    for (const p of PUBLICATION_PROFILES.filter((p) => p.host !== "ramosjames.com")) {
+      assert(profiles.some((x) => x.id === p.id && x.host === p.host && x.color === p.color));
+    }
+  } finally {
+    await pg.close();
+  }
 });
 test("cover migration, queue deduplication, ownership, recovery, and export packaging", async () => {
   const pg = new PGlite();

@@ -9,6 +9,8 @@ import {
   roadNameWarnings,
 } from "./editorial";
 import { escapeHTML as esc } from "./export";
+import { publicationTheme } from "./publication-profiles";
+import { applyPublicationTemplate } from "./publication-template";
 
 function paragraphs(body: string) {
   return body
@@ -30,7 +32,7 @@ export function renderChart(d: Draft, domain?: Domain) {
     rows = editorialRows(e).slice(0, 10),
     max = Math.max(1, ...rows.map((r) => r[e.spec.metric]));
   const height = 230 + rows.length * 66,
-    color = /^#[0-9a-f]{6}$/i.test(domain?.color || "") ? domain!.color : "#245bda";
+    color = publicationTheme(domain).color;
   const title = `${metricLabel(e.spec.metric)} by ${e.spec.group}`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="${height}" viewBox="0 0 1200 ${height}" role="img" aria-labelledby="title desc"><title id="title">${esc(title)}</title><desc id="desc">${esc(e.spec.start)} to ${esc(e.spec.end)}. Reported counts, not risk per trip. ${rows.map((r) => esc(r.label) + ": " + r[e.spec.metric]).join("; ")}</desc><rect width="1200" height="${height}" fill="#ffffff"/><rect width="1200" height="8" fill="${color}"/><g font-family="Arial,sans-serif" fill="#142c43"><text x="48" y="57" font-size="17" letter-spacing="2">${esc(domain?.name || "TEXAS CRASH RESEARCH")}</text><text x="48" y="104" font-size="30" font-weight="700">${esc(titleCase(title))}</text><text x="48" y="138" font-size="19" fill="#526779">${esc(e.spec.city || "Texas")} · ${e.spec.start} — ${e.spec.end}</text>${rows
     .map((r, i) => {
@@ -42,6 +44,13 @@ export function renderChart(d: Draft, domain?: Domain) {
     )}<text x="48" y="${height - 32}" font-size="17" fill="#526779">Source: TxDOT public extract · Returned groups only · Counts are not exposure-adjusted risk</text></g></svg>`;
 }
 export function renderPublication(d: Draft, domain?: Domain, preview = false, coverSrc?: string) {
+  return applyPublicationTemplate(
+    renderBasePublication(d, domain, preview, coverSrc),
+    domain,
+    preview,
+  );
+}
+function renderBasePublication(d: Draft, domain?: Domain, preview = false, coverSrc?: string) {
   const e = d.evidence,
     rows = editorialRows(e),
     lead = rows[0];

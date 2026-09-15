@@ -135,3 +135,17 @@ Export **Complete article + image package** for HTML, cover, deterministic SVG c
 Deployment requires **008_editorial_covers.sql**, a small additive migration (no crash-table rebuild or reimport). Both Railway configuration files already run `npm run db:migrate` before starting; verify that the deployment logs show this migration applied. If your service uses custom commands instead of those files, run `npm run db:migrate` as its pre-deploy command. Keep web and worker on the same commit. The included image works without an image API call; new generations need the worker's API key.
 
 Local QA: `npx tsx scripts/preview-editorial.ts` serves a clearly labeled synthetic layout fixture on `127.0.0.1:3210`, without a database or external API call.
+
+### Publication-specific templates
+
+Migration **009_publication_profiles.sql** adds Trucking Chicas, Ramos James Law and Find Austin Lawyer to Publications. It preserves any existing matching profile (including `www` aliases), custom branding and draft associations. No crash data is touched and no reimport or new environment variable is needed. Railway's existing pre-deploy migration command applies it.
+
+Choose a publication in Editorial, then open **Page preview**. The selection automatically applies its template to the preview, HTML exports, SVG chart, article ZIP and publication index. Save and reapprove the draft before exporting; choosing a template does not rewrite the story, replace its cover, alter the evidence or publish it. Custom domains retain a generic journal template. Name, byline and chart/accent color remain editable in Publications.
+
+Template references inspected on 2026-09-15:
+
+- [Trucking Chicas](https://truckingchicas.com): site CSS uses `#121212`, `#e53935`, `#f3e8d9` and Inter; the article adaptation uses a dark masthead, bold headings and dark statistics panels.
+- [Ramos James Law](https://ramosjames.com): site CSS uses navy `#011e4d`, blue `#38b7e3`, pink `#fd2489`, pale blue `#f3faff`, Avenir LT Std and Ivy Mode; the article adaptation uses serif headlines and light-blue panels.
+- **Find Austin Lawyer is provisional.** Both `findaustinlawyer.com` and its `www` host failed DNS lookup during inspection. Its neutral blue journal design is not claimed to match the live site. A warning appears in the editor/preview and article package notes. Supply a screenshot or reachable site to refine it.
+
+These are brand-informed portable article templates, not exact copies of each site's CMS theme. Fonts use local/system fallbacks; licensed fonts, proprietary logos, trackers, forms and live-site scripts are not redistributed. CSS is embedded for offline portability. The downloadable research index is optional: **do not replace an existing homepage, robots.txt or sitemap.xml** with the archive's files. Integrate articles using the existing site's publishing workflow and confirm the final canonical URL. No CMS, hosting or DNS connection is created.

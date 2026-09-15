@@ -19,7 +19,6 @@ import {
 } from '@/lib/importer';
 import { slugify, FILE_TYPES } from '@/lib/contracts';
 import { exportCSV, renderChart } from '@/lib/export';
-import { escapeHTML } from '@/lib/export';
 import { zip } from '@/lib/zip';
 import { aiInterpret, aiWrite } from '@/lib/ai';
 import { requestFailure } from '@/lib/errors';
@@ -30,6 +29,7 @@ import { importPlanner } from '@/lib/keyword-planner';
 import { assertEditorialReady, composeEditorial, starterArticle } from '@/lib/editorial';
 import { coverBytes, coverChoices, hydrateCover, queueCover, validateCover } from '@/lib/covers';
 import { articleEntries, standaloneArticle } from '@/lib/editorial-package';
+import { renderPublicationIndex } from '@/lib/publication-template';
 import type { ZipEntry } from '@/lib/zip';
 const assertFreshTime = (e:any) => { if(needsTimeRefresh(e)) throw new Error('This hour-based evidence predates the AM/PM correction. Run fresh research before drafting or exporting.'); };
 export const dynamic = 'force-dynamic';
@@ -116,7 +116,7 @@ async function handler(
         }
         entries.push({
           name: 'index.html',
-          text: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(domain.name)}</title><link rel="canonical" href="https://${domain.host}/"><style>body{font:17px/1.7 system-ui;max-width:850px;margin:60px auto;padding:25px;color:#172c42}a{color:${domain.color}}li{margin:20px 0}h1{font-size:38px}</style></head><body><h1>${escapeHTML(domain.name)}</h1><p>Independent research using Texas Department of Transportation public crash data.</p><ul>${drafts.map((d) => `<li><a href="/${d.slug}/">${escapeHTML(d.title)}</a><br><small>Data: ${d.evidence.spec.start} – ${d.evidence.spec.end}</small></li>`).join('')}</ul></body></html>`,
+          text: renderPublicationIndex(drafts, domain),
         });
         entries.push({
           name: 'sitemap.xml',
@@ -128,7 +128,7 @@ async function handler(
         });
         entries.push({
           name: 'README.txt',
-          text: `Publication: ${domain.name}\nDomain: ${domain.host}\nUpload the contents of this archive to the web root of your static hosting account. Keep each page in its slug/index.html folder so canonical URLs match. Configure your own domain with your hosting provider. No DNS or live website changes were made by this export. Each article contains methods and links to TxDOT. Evidence JSON and aggregate CSV files accompany every page. Review geographic labels and reporting completeness before deployment.\n`,
+          text: `Publication: ${domain.name}\nDomain: ${domain.host}\nThis is a portable static research package, not a WordPress import or an automatic publishing connection. For an existing website, integrate the article folders using your site's publishing workflow; DO NOT overwrite its homepage, robots.txt or sitemap.xml. The included index is an optional research listing, not a replacement for your live homepage. Keep each article in its slug/index.html folder at the configured domain root so its canonical URL matches, or update canonical URLs if your CMS uses another path. Brand fonts use system fallbacks unless installed by the destination site. No DNS or live website changes were made by this export. Each article contains methods and links to TxDOT. Evidence JSON and aggregate CSV files accompany every page. Review the selected template, geographic labels and reporting completeness before deployment.\n`,
         });
         const archive = zip(entries);
         return new Response(archive, {

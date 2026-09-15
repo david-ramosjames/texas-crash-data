@@ -10,6 +10,7 @@ import {
 } from "./editorial";
 import { exportCSV, renderChart, renderPage } from "./export";
 import type { ZipEntry } from "./zip";
+import { publicationTheme } from "./publication-profiles";
 export async function articleEntries(d: Draft, domain?: Domain): Promise<ZipEntry[]> {
   assertEditorialReady(d.body);
   const draft = await hydrateCover(d);
@@ -34,7 +35,7 @@ export async function articleEntries(d: Draft, domain?: Domain): Promise<ZipEntr
     { name: "evidence.json", text: JSON.stringify(draft.evidence, null, 2) },
     {
       name: "README.txt",
-      text: `Approved editorial export. Keep index.html and any cover image together. Chart values come directly from the saved evidence, not AI. Review labels and statistics before publication. ${cover ? COVER_CAPTION + "\nCover alt text: " + cover.alt : "No cover selected."}\nNothing has been published automatically.`,
+      text: `Approved editorial export. Template: ${publicationTheme(domain).label}. ${publicationTheme(domain).description}\nKeep index.html and any cover image together. This is a portable article layout, not an automatic CMS import. Brand fonts use system fallbacks unless available at the destination. When integrating with an existing site, do not overwrite its homepage; preserve or update the article's canonical URL to match its final location. Chart values come directly from the saved evidence, not AI. Review labels and statistics before publication. ${cover ? COVER_CAPTION + "\nCover alt text: " + cover.alt : "No cover selected."}\nNothing has been published automatically.`,
     },
   ];
   if (cover && coverName) entries.push({ name: coverName, bytes: cover.bytes });
