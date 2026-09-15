@@ -7,6 +7,7 @@ import { requestFailure } from '../lib/errors';
 import { reportJobFailure } from '../lib/worker-diagnostics';
 import { enqueueTimeRepair, repairTimes } from '../lib/time-repair';
 import { enqueueProposals, proposeIdeas, researchIdea } from '../lib/ideas';
+import { generateCover } from '../lib/covers';
 const pool = database(), workerId = crypto.randomUUID();
 let stopping = false;
 process.on('SIGTERM', () => { stopping = true; });
@@ -44,6 +45,7 @@ while (!stopping) {
           : job.kind === 'repair_time' ? await repairTimes(progress)
           : job.kind === 'propose' ? await proposeIdeas(progress,job.id)
           : job.kind === 'research' ? await researchIdea(job,progress)
+          : job.kind === 'cover' ? await generateCover(job,progress)
           : await discover(progress, job.id);
         await progress('Saving completed job');
         await transaction(async () => {
@@ -54,7 +56,7 @@ while (!stopping) {
             await run("INSERT INTO settings(key,value) VALUES('discovery_stale','false') ON CONFLICT(key) DO UPDATE SET value='false'");
           }
           if(job.kind==='repair_time') await enqueueProposals();
-          if(['propose','research','repair_time'].includes(job.kind)) await run("INSERT INTO settings(key,value) VALUES('desk_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",new Date().toISOString());
+          if(['propose','research','repair_time','cover'].includes(job.kind)) await run("INSERT INTO settings(key,value) VALUES('desk_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",new Date().toISOString());
         });
         console.log(`Job ${job.id} complete (${job.kind}).`);
       } catch (error) {

@@ -109,7 +109,10 @@ export type Finding = {
   created: string;
   updated: string;
 };
+export type Cover = { id: string; url: string; alt: string; caption: string };
 export type Draft = {
+  cover_id?: string | null;
+  cover?: Cover;
   id: string;
   finding_id?: string;
   title: string;

@@ -86,7 +86,8 @@ import {
 import { uploadFiles, UploadProgress, validateResumeSelection } from '@/lib/upload';
 import { ImportRecovery, type RecoveryBatch } from '@/components/import-recovery';
 import { identify } from '@/lib/csv';
-import { renderPage } from '@/lib/export';
+import { EditorialAssets, PublicationPreview } from './editorial-assets';
+import { headlineIdeas } from '@/lib/editorial';
 import { IdeasInbox } from './ideas-inbox';
 import { ExtraFilters, ComparisonFilter } from './research-fields';
 import { periodLabel, needsTimeRefresh } from '@/lib/research-quality';
@@ -1072,9 +1073,10 @@ export default function Studio() {
                                 })
                               }
                             >
-                              <Sparkles /> AI rewrite
+                              <Sparkles /> Write full article
                             </Button>
                           )}
+                          <Button variant="outline" disabled={!!busy || dirty} onClick={()=>action('Preparing article',async()=>{const r=await api('article-template/'+draft.id,{});edit({body:r.body});setNotice(r.notice);})}>Refresh evidence-based draft</Button>
                         </div>
                         <div className="field">
                           <label htmlFor="draft-title">Headline</label>
@@ -1084,6 +1086,7 @@ export default function Studio() {
                             value={draft.title}
                             onChange={(e) => edit({ title: e.target.value })}
                           />
+                          <details><summary className="fine-print">Headline ideas</summary><div className="grid gap-2 mt-2">{headlineIdeas(draft.evidence).map(title=><button key={title} type="button" className="text-left text-sm text-blue-700" onClick={()=>edit({title})}>{title}</button>)}</div></details>
                         </div>
                         <Tabs
                           value={editTab}
@@ -1097,6 +1100,7 @@ export default function Studio() {
                             <TabsTrigger value="evidence">Evidence</TabsTrigger>
                           </TabsList>
                           <TabsContent value="write">
+                            <p className="fine-print">Write a clear story above “Verified statistics”. Statistics and methods are rebuilt from the saved evidence when you save or export. AI drafts still need a human fact and language review.</p>
                             <Textarea
                               aria-label="Draft content"
                               className="draft-body"
@@ -1112,16 +1116,7 @@ export default function Studio() {
                             </p>
                           </TabsContent>
                           <TabsContent value="preview">
-                            <iframe
-                              title="Publication preview"
-                              sandbox=""
-                              className="page-preview"
-                              srcDoc={renderPage(
-                                draft,
-                                domains.find((x) => x.id === draft.domain_id),
-                                true,
-                              )}
-                            />
+                            <PublicationPreview draft={draft} domain={domains.find((x)=>x.id===draft.domain_id)}/>
                           </TabsContent>
                           <TabsContent value="evidence">
                             <EvidencePanel e={draft.evidence} />
@@ -1168,6 +1163,7 @@ export default function Studio() {
                             </li>
                           </ul>
                         </div>
+                        <EditorialAssets draft={draft} edit={edit} api={api} revision={data.revision} images={data.ai.images} dirty={dirty} jobs={data.jobs || []} onQueued={refresh}/>
                         <Button
                           variant="outline"
                           disabled={!!busy}
@@ -1186,7 +1182,9 @@ export default function Studio() {
                           {draft.status === 'approved' && !dirty ? (
                             <>
                               {[
+                                ['zip', 'Complete article + image package'],
                                 ['html', 'Standalone web page'],
+                                ['svg', 'Verified ranking graphic'],
                                 ['txt', 'Newsletter / social text'],
                                 ['csv', 'Research data table'],
                                 ['json', 'Evidence & methodology'],

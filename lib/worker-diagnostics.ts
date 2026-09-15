@@ -10,8 +10,8 @@ export async function reportJobFailure(
   persist = failJob,
   log: (message: string, details: Record<string, unknown>) => void = console.error,
 ) {
-  const terminal = error instanceof CrashTimeFormatError;
-  const failure = terminal
+  const terminal = error instanceof CrashTimeFormatError || job.kind === 'cover';
+  const failure = error instanceof CrashTimeFormatError
     ? { code: 'CRASH_TIME_FORMAT', error: error.message }
     : requestFailure(error);
   const metadata = { jobId: job.id, kind: job.kind, attempt: job.attempts, phase, code: failure.code };

@@ -1,9 +1,10 @@
 import { all, run } from "./db";
 import { enqueueProposals } from "./ideas";
-import { usableLocation, comparisonRow } from "./research-quality";
+import { usableLocation } from "./research-quality";
 import { research, summary, type QueryProgress } from "./research";
 import { Evidence, Spec, COHORTS, number, titleCase } from "./contracts";
 import { discoveryCheckpoints } from "./discovery-checkpoints";
+import { starterArticle } from './editorial';
 type FindingOutcome = { created: number; refreshed: number };
 export async function discover(progress: QueryProgress = async () => {}, jobId?: string) {
   const s = await summary(progress);
@@ -308,37 +309,5 @@ export async function discover(progress: QueryProgress = async () => {}, jobId?:
   };
 }
 export function draftBody(e: Evidence, title: string, channel: string) {
-  const displayRows=e.comparison?.focusLabel?e.rows.filter(r=>r.label===e.comparison!.focusLabel):e.rows;
-  const lead = displayRows[0];
-  const metrics =
-    e.spec.metric === "severe"
-      ? "fatal or serious-injury crashes"
-      : e.spec.metric === "fatal"
-        ? "fatal crashes"
-        : "reported crashes";
-  const where = e.spec.city ? ` in ${titleCase(e.spec.city)}` : " in Texas";
-  const intro = `The supplied Texas Department of Transportation public crash extract records ${number(e.total)} matching crashes${where} from ${e.spec.start} through ${e.spec.end}. This analysis groups ${COHORTS[e.spec.cohort].toLowerCase()} by ${e.spec.group} and ranks them by ${metrics}.`;
-  let findings = displayRows
-    .slice(0, channel === "social" ? 3 : 10)
-    .map(
-      (r, i) =>
-        `${i + 1}. ${titleCase(r.label)}: ${number(r.crashes)} crashes; ${number(r.severe)} fatal or serious-injury crashes; ${number(r.fatal)} fatal crashes.`,
-    )
-    .join("\n");
-  if (e.comparison)
-    findings +=
-      `\n\nCOMPARISON: ${e.comparison.start} through ${e.comparison.end}\n${e.comparison.caveat}\n` +
-      displayRows
-        .slice(0, 10)
-        .map((r) => {
-          const old = comparisonRow(e,r.label);
-          return old
-            ? `${titleCase(r.label)}: ${old.crashes} previously; ${r.crashes} currently.`
-            : "";
-        })
-        .filter(Boolean)
-        .join("\n");
-  if (channel === "social")
-    return `${title}\n\n${lead ? `${titleCase(lead.label)} recorded ${number(lead[e.spec.metric])} ${metrics} in this extract. ` : ""}Period: ${e.spec.start} to ${e.spec.end}.\n\n${findings}\n\nThese are reported crash counts, not risk per trip. ${e.warnings[0]}\n\nSource: TxDOT public crash extract. See the full methodology before drawing conclusions.`;
-  return `${intro}\n\nWHAT THE DATA SHOWS\n\n${findings}\n\nHOW TO READ THIS\n\nThis is an aggregate description of the supplied records. It does not establish why a crash occurred, identify fault, or measure the safety of a road or vehicle per trip.\n\nMETHODOLOGY & LIMITS\n\n${e.warnings.map((x) => "- " + x).join("\n")}\n\nMinimum group size: ${e.spec.min}. ${number(e.excluded)} matching crashes excluded from this grouping because no usable reported intersection pair was recorded. ${number(e.unlocated)} matching crashes have no usable mapped coordinates.\n\nSOURCE\n\nTexas Department of Transportation public crash extract. ${e.sources.length} source batch(es). Data and query snapshot captured ${e.generated.slice(0, 10)}. Source batch IDs and reproducible query accompany this draft.`;
+  return starterArticle(e, channel);
 }

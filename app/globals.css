@@ -1277,3 +1277,12 @@ h3 {
     scroll-behavior: auto !important;
   }
 }
+/* Editorial media stays independent of draft text and requires explicit selection. */
+.editorial-assets{border-top:1px solid #dce4ed;padding-top:22px;margin:22px 0;display:grid;gap:12px}
+.cover-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;max-height:520px;overflow:auto}
+.cover-choice{padding:0;border:2px solid #dce4ed;border-radius:9px;background:white;text-align:left;overflow:hidden;cursor:pointer;color:#173047}
+.cover-choice.selected{border-color:#245bda;box-shadow:0 0 0 2px #245bda22}
+.cover-choice img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+.cover-choice span{display:block;padding:10px;font-size:12px}
+.cover-choice:focus-visible{outline:3px solid #245bda;outline-offset:3px}
+.cover-warning{background:#fff7e6;border-left:3px solid #b97400;padding:12px;font-size:13px;line-height:1.6}

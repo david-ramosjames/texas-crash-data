@@ -18,7 +18,7 @@ import {
   activate,
 } from '@/lib/importer';
 import { slugify, FILE_TYPES } from '@/lib/contracts';
-import { renderPage, exportCSV } from '@/lib/export';
+import { exportCSV, renderChart } from '@/lib/export';
 import { escapeHTML } from '@/lib/export';
 import { zip } from '@/lib/zip';
 import { aiInterpret, aiWrite } from '@/lib/ai';
@@ -27,6 +27,10 @@ import { activity } from '@/lib/activity';
 import { approveIdea, enqueueProposals, saveIdea } from '@/lib/ideas';
 import { needsTimeRefresh } from '@/lib/research-quality';
 import { importPlanner } from '@/lib/keyword-planner';
+import { assertEditorialReady, composeEditorial, starterArticle } from '@/lib/editorial';
+import { coverBytes, coverChoices, hydrateCover, queueCover, validateCover } from '@/lib/covers';
+import { articleEntries, standaloneArticle } from '@/lib/editorial-package';
+import type { ZipEntry } from '@/lib/zip';
 const assertFreshTime = (e:any) => { if(needsTimeRefresh(e)) throw new Error('This hour-based evidence predates the AM/PM correction. Run fresh research before drafting or exporting.'); };
 export const dynamic = 'force-dynamic';
 const json = (body: unknown, status = 200) =>
@@ -74,6 +78,14 @@ async function handler(
       return JSON.parse(text);
     };
     if (req.method === 'GET') {
+      if (area === 'covers' && id) {
+        const cover = await coverBytes(id);
+        return new Response(cover.bytes, { headers: { 'Content-Type': cover.mime, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options':'nosniff' } });
+      }
+      if (area === 'draft-covers' && id) {
+        if (!await first('SELECT id FROM drafts WHERE id=?',id)) throw new Error('Draft not found.');
+        return json(await coverChoices(id));
+      }
       if (area === 'imports' && action === 'parts') return json(await all('SELECT kind,part,sha256 FROM raw_parts WHERE batch_id=?',id));
       if (area === 'site-package') {
         const domain = await first<any>('SELECT * FROM domains WHERE id=?', id);
@@ -93,14 +105,15 @@ async function handler(
           throw new Error(
             'This export supports up to 100 pages per publication. Split a larger publication into export batches.',
           );
-        const entries = drafts.flatMap((d) => [
-          { name: d.slug + '/index.html', text: renderPage(d, domain) },
-          {
-            name: d.slug + '/evidence.json',
-            text: JSON.stringify(d.evidence, null, 2),
-          },
-          { name: d.slug + '/data.csv', text: exportCSV(d) },
-        ]);
+        const entries: ZipEntry[] = [];
+        let packageBytes = 0;
+        for (const d of drafts) {
+          for (const entry of await articleEntries(d,domain)) {
+            packageBytes += entry.bytes?.length ?? Buffer.byteLength(entry.text!);
+            if (packageBytes > 150_000_000) throw new Error('Publication package exceeds 150 MB. Split it into smaller publications.');
+            entries.push({ ...entry, name: d.slug + '/' + entry.name });
+          }
+        }
         entries.push({
           name: 'index.html',
           text: `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(domain.name)}</title><link rel="canonical" href="https://${domain.host}/"><style>body{font:17px/1.7 system-ui;max-width:850px;margin:60px auto;padding:25px;color:#172c42}a{color:${domain.color}}li{margin:20px 0}h1{font-size:38px}</style></head><body><h1>${escapeHTML(domain.name)}</h1><p>Independent research using Texas Department of Transportation public crash data.</p><ul>${drafts.map((d) => `<li><a href="/${d.slug}/">${escapeHTML(d.title)}</a><br><small>Data: ${d.evidence.spec.start} – ${d.evidence.spec.end}</small></li>`).join('')}</ul></body></html>`,
@@ -142,16 +155,19 @@ async function handler(
             )
           : null;
         const format = url.searchParams.get('format') || 'html';
-        if (!['html', 'csv', 'json', 'txt'].includes(format))
+        if (!['html', 'csv', 'json', 'txt','svg','zip'].includes(format))
           throw new Error('Unsupported export format.');
+        if (format === 'zip') return new Response(zip(await articleEntries(draft,domain)), { headers: {'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${draft.slug}.zip"`,'Cache-Control':'no-store'} });
+        if (format === 'svg') return new Response(renderChart(draft,domain), { headers: {'Content-Type':'image/svg+xml','Content-Disposition':`attachment; filename="${draft.slug}-chart.svg"`,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'"} });
+        if (format === 'txt') assertEditorialReady(draft.body);
         const content =
           format === 'html'
-            ? renderPage(draft, domain)
+            ? await standaloneArticle(draft, domain)
             : format === 'csv'
               ? exportCSV(draft)
               : format === 'json'
                 ? JSON.stringify(draft.evidence, null, 2)
-                : draft.title + '\n\n' + draft.body;
+                : draft.title + '\n\n' + composeEditorial(draft.body,draft.evidence);
         return new Response(content, {
           headers: {
             'Content-Type':
@@ -165,7 +181,7 @@ async function handler(
             'Content-Disposition': `attachment; filename="${draft.slug}.${format}"`,
             'Cache-Control': 'no-store',
             'Content-Security-Policy':
-              "default-src 'none'; style-src 'unsafe-inline'",
+              "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
           },
         });
       }
@@ -188,10 +204,10 @@ async function handler(
             ...x,
             evidence: JSON.parse(x.evidence),
           })),
-          drafts: drafts.map((x) => ({
+          drafts: await Promise.all(drafts.map((x) => hydrateCover({
             ...x,
             evidence: JSON.parse(x.evidence),
-          })),
+          }))),
           domains,
           settings: Object.fromEntries(settings.map((x) => [x.key, x.value])),
           ideas: (await all<any>('SELECT i.*,j.status job_status,j.error job_error FROM research_ideas i LEFT JOIN jobs j ON j.id=i.job_id ORDER BY i.created DESC')).map(i=>({...i,spec:JSON.parse(i.spec)})),
@@ -199,6 +215,7 @@ async function handler(
           ai: {
             connected: !!runtime().OPENAI_API_KEY && !!runtime().OPENAI_MODEL,
             model: runtime().OPENAI_MODEL || null,
+            images: !!runtime().OPENAI_API_KEY,
           },
           user: user.displayName,
         });
@@ -244,6 +261,13 @@ async function handler(
         );
     }
     if (req.method === 'POST') {
+      if (area === 'draft-covers' && id) return json(await queueCover(id));
+      if (area === 'article-template' && id) {
+        const d = await first<any>('SELECT * FROM drafts WHERE id=?',id);
+        if (!d) throw new Error('Draft not found.');
+        const e = JSON.parse(d.evidence); assertFreshTime(e);
+        return json({body: starterArticle(e,d.channel), notice:'New evidence-based article is unsaved. Review it before saving.'});
+      }
       if(area==='ideas' && id==='keyword-planner'){const input=await body();return json(await importPlanner(input.text,input.context));}
       if(area==='ideas' && id==='propose') return json(await enqueueProposals());
       if(area==='ideas' && action==='approve') return json(await approveIdea(id,await body()));
@@ -384,6 +408,7 @@ async function handler(
           throw new Error('A title and body are required.');
         if (!['draft', 'approved', 'exported'].includes(input.status))
           throw new Error('Invalid editorial state.');
+        if (['approved','exported'].includes(input.status)) assertEditorialReady(input.body);
         if (
           input.domain_id &&
           !(await first('SELECT id FROM domains WHERE id=?', input.domain_id))
@@ -402,13 +427,14 @@ async function handler(
             'Another draft uses this publication and slug. Choose a unique URL.',
           );
         await run(
-          'UPDATE drafts SET title=?,slug=?,body=?,domain_id=?,status=?,updated=? WHERE id=?',
+          'UPDATE drafts SET title=?,slug=?,body=?,domain_id=?,status=?,updated=?,cover_id=? WHERE id=?',
           input.title.trim(),
           slug,
-          input.body,
+          composeEditorial(input.body,JSON.parse(old.evidence)),
           input.domain_id || null,
           input.status,
           new Date().toISOString(),
+          await validateCover(input.cover_id === undefined ? old.cover_id : input.cover_id,id),
           id,
         );
         return json({ saved: true });

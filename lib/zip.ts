@@ -9,7 +9,8 @@ function crc32(data: Uint8Array) {
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
-export function zip(entries: { name: string; text: string }[]) {
+export type ZipEntry = { name: string; text: string; bytes?: never } | { name: string; bytes: Uint8Array; text?: never };
+export function zip(entries: ZipEntry[]) {
   const chunks: Uint8Array[] = [],
     central: Uint8Array[] = [];
   let offset = 0,
@@ -22,8 +23,9 @@ export function zip(entries: { name: string; text: string }[]) {
     )
       throw new Error('Invalid export path.');
     const name = encoder.encode(entry.name),
-      data = encoder.encode(entry.text),
+      data = entry.bytes ?? encoder.encode(entry.text),
       crc = crc32(data);
+    if (offset + data.length > 150_000_000) throw new Error('Publication package exceeds 150 MB. Export fewer pages at a time.');
     const local = new Uint8Array(30 + name.length),
       l = new DataView(local.buffer);
     l.setUint32(0, 0x04034b50, true);
