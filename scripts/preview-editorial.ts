@@ -5,6 +5,8 @@ import { BUILTIN_COVER, starterArticle } from "../lib/editorial";
 import type { Evidence, Draft } from "../lib/contracts";
 import { PUBLICATION_PROFILES } from "../lib/publication-profiles";
 import { renderInfographic } from "../lib/infographic";
+import { renderSocialCard } from "../lib/social";
+import { coverBytes } from "../lib/covers";
 const evidence: Evidence = {
   spec: {
     cohort: "truck",
@@ -63,9 +65,29 @@ const pages = await Promise.all(
     async (domain) => [domain.host, await standaloneArticle(draft, domain)] as const,
   ),
 );
+const socialPhoto = await coverBytes(BUILTIN_COVER);
 createServer((req, res) => {
-  if (req.url === '/infographic.svg') {
-    res.writeHead(200, {'Content-Type':'image/svg+xml'});
+  if (req.url?.startsWith("/social.svg")) {
+    const params = new URL(req.url, "http://127.0.0.1:3210").searchParams;
+    res.writeHead(200, { "Content-Type": "image/svg+xml" });
+    res.end(
+      renderSocialCard(
+        {
+          ...draft,
+          channel: "social",
+          body: "Synthetic preview — not real crash findings.",
+          social_json: JSON.stringify({ style: params.get("style") || "photo", carousel: true }),
+        },
+        PUBLICATION_PROFILES[0],
+        `data:${socialPhoto.mime};base64,${Buffer.from(socialPhoto.bytes).toString("base64")}`,
+        Number(params.get("slide") || 0),
+        true,
+      ),
+    );
+    return;
+  }
+  if (req.url === "/infographic.svg") {
+    res.writeHead(200, { "Content-Type": "image/svg+xml" });
     res.end(renderInfographic(draft, PUBLICATION_PROFILES[0], true));
     return;
   }

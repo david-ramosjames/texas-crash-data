@@ -31,6 +31,10 @@ import { coverBytes, coverChoices, hydrateCover, queueCover, validateCover } fro
 import { articleEntries, standaloneArticle } from '@/lib/editorial-package';
 import { renderPublicationIndex } from '@/lib/publication-template';
 import { renderInfographic } from '@/lib/infographic';
+import { socialDesign, socialCaption, renderSocialCard } from '@/lib/social';
+import { socialImage, socialEntries } from '@/lib/social-package';
+import { BUILTIN_COVER, narrativeOnly } from '@/lib/editorial';
+import { storeReference, referenceImage } from '@/lib/social-reference';
 import type { ZipEntry } from '@/lib/zip';
 const assertFreshTime = (e:any) => { if(needsTimeRefresh(e)) throw new Error('This hour-based evidence predates the AM/PM correction. Run fresh research before drafting or exporting.'); };
 export const dynamic = 'force-dynamic';
@@ -79,6 +83,10 @@ async function handler(
       return JSON.parse(text);
     };
     if (req.method === 'GET') {
+      if(area==='social-reference' && id) {
+        const file=await referenceImage(id);
+        return new Response(file.body,{headers:{'Content-Type':file.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
+      }
       if (area === 'covers' && id) {
         const cover = await coverBytes(id);
         return new Response(cover.bytes, { headers: { 'Content-Type': cover.mime, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options':'nosniff' } });
@@ -156,6 +164,15 @@ async function handler(
             )
           : null;
         const format = url.searchParams.get('format') || 'html';
+        if (draft.channel === 'social') {
+          if(format==='html')throw new Error('Social drafts export as captions and images, not web pages. Use the Social post editor.');
+          if(format==='zip')return new Response(zip(await socialEntries(draft,domain)),{headers:{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${draft.slug}-social.zip"`,'Cache-Control':'no-store'}});
+          if(format==='social-image'||format==='svg') {
+            const svg=await socialImage(draft,domain,Number(url.searchParams.get('slide')||0));
+            return new Response(svg,{headers:{'Content-Type':'image/svg+xml','Content-Disposition':`attachment; filename="${draft.slug}-social.svg"`,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; img-src data:; sandbox"}});
+          }
+          if(format==='txt')return new Response(socialCaption(draft),{headers:{'Content-Type':'text/plain; charset=utf-8','Content-Disposition':`attachment; filename="${draft.slug}-caption.txt"`,'Cache-Control':'no-store'}});
+        }
         if (!['html', 'csv', 'json', 'txt','svg','zip','infographic'].includes(format))
           throw new Error('Unsupported export format.');
         if (format === 'infographic') return new Response(renderInfographic(draft,domain), { headers: {'Content-Type':'image/svg+xml','Content-Disposition':`attachment; filename="${draft.slug}-infographic.svg"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; sandbox"} });
@@ -263,6 +280,10 @@ async function handler(
         );
     }
     if (req.method === 'POST') {
+      if(area==='social-reference' && id) {
+        if(action==='remove'){await run('UPDATE drafts SET social_reference_id=NULL WHERE id=?',id);return json({removed:true});}
+        return json(await storeReference(id,req));
+      }
       if (area === 'draft-covers' && id) return json(await queueCover(id));
       if (area === 'article-template' && id) {
         const d = await first<any>('SELECT * FROM drafts WHERE id=?',id);
@@ -354,7 +375,12 @@ async function handler(
         let evidence: any;
         let title: string;
         let findingId: string | null = null;
-        if (input.findingId) {
+        let publicationId: string | null = null;
+        if (input.sourceDraftId) {
+          const source=await first<any>('SELECT * FROM drafts WHERE id=?',input.sourceDraftId);
+          if(!source || source.channel!=='page' || source.status!=='approved' || input.channel!=='social')throw new Error('Choose an approved page to create a social post.');
+          evidence=JSON.parse(source.evidence);title=source.title;findingId=source.finding_id;publicationId=source.domain_id;
+        } else if (input.findingId) {
           const f = await first<any>(
             'SELECT * FROM findings WHERE id=?',
             input.findingId,
@@ -381,17 +407,19 @@ async function handler(
         const newId = crypto.randomUUID(),
           now = new Date().toISOString();
         await run(
-          "INSERT INTO drafts(id,finding_id,title,slug,channel,domain_id,body,status,evidence,created,updated) VALUES(?,?,?,?,?,?,?,'draft',?,?,?)",
+          "INSERT INTO drafts(id,finding_id,title,slug,channel,domain_id,body,status,evidence,created,updated,social_json,cover_id) VALUES(?,?,?,?,?,?,?,'draft',?,?,?,?,?)",
           newId,
           findingId,
           title,
-          slugify(title),
+          input.channel==='social'?`${slugify(title).slice(0,90)}-social-${newId.slice(0,8)}`:slugify(title),
           input.channel,
-          null,
-          draftBody(evidence, title, input.channel),
+          publicationId,
+          input.channel==='social'?narrativeOnly(draftBody(evidence,title,input.channel)):draftBody(evidence, title, input.channel),
           JSON.stringify(evidence),
           now,
           now,
+          input.channel==='social'?JSON.stringify(socialDesign(JSON.stringify({style:evidence.spec.cohort==='truck'?'photo':'statistic'}))):'{}',
+          input.channel==='social'&&evidence.spec.cohort==='truck'?BUILTIN_COVER:null,
         );
         return json({ id: newId });
       }
@@ -416,7 +444,7 @@ async function handler(
           !(await first('SELECT id FROM domains WHERE id=?', input.domain_id))
         )
           throw new Error('Choose an existing publication.');
-        const slug = slugify(input.slug || input.title);
+        const slug = old.channel==='social' ? `${slugify(input.slug || input.title).replace(/-social-[a-z0-9]+$/,'').slice(0,90)}-social-${id.slice(0,8)}` : slugify(input.slug || input.title);
         if (!slug) throw new Error('A valid page slug is required.');
         const duplicate = await first(
           'SELECT id FROM drafts WHERE domain_id IS NOT DISTINCT FROM ? AND slug=? AND id<>?',
@@ -428,15 +456,24 @@ async function handler(
           throw new Error(
             'Another draft uses this publication and slug. Choose a unique URL.',
           );
+        const design=old.channel==='social'?socialDesign(input.social_json??old.social_json):null;
+        const selectedCover=await validateCover(input.cover_id === undefined ? old.cover_id : input.cover_id,id);
+        if(old.channel==='social' && ['approved','exported'].includes(input.status)) {
+          if(design!.style==='photo'&&!selectedCover)throw new Error('Select an illustration for the photo-led card, or choose Big statistic / Mini infographic before approval.');
+          const socialDraft={...old,...input,social_json:JSON.stringify(design),evidence:JSON.parse(old.evidence)};
+          const socialDomain=input.domain_id?await first<any>('SELECT * FROM domains WHERE id=?',input.domain_id):undefined;
+          for(let i=0;i<(design!.carousel?3:1);i++)renderSocialCard(socialDraft,socialDomain,selectedCover?'data:image/png;base64,AA==':undefined,i);
+        }
         await run(
-          'UPDATE drafts SET title=?,slug=?,body=?,domain_id=?,status=?,updated=?,cover_id=? WHERE id=?',
+          'UPDATE drafts SET title=?,slug=?,body=?,domain_id=?,status=?,updated=?,cover_id=?,social_json=? WHERE id=?',
           input.title.trim(),
           slug,
-          composeEditorial(input.body,JSON.parse(old.evidence)),
+          old.channel==='social'?narrativeOnly(input.body):composeEditorial(input.body,JSON.parse(old.evidence)),
           input.domain_id || null,
           input.status,
           new Date().toISOString(),
-          await validateCover(input.cover_id === undefined ? old.cover_id : input.cover_id,id),
+          selectedCover,
+          design?JSON.stringify(design):old.social_json||'{}',
           id,
         );
         return json({ saved: true });

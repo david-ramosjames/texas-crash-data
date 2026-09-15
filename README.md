@@ -150,6 +150,18 @@ Template references inspected on 2026-09-15:
 
 These are brand-informed portable article templates, not exact copies of each site's CMS theme. Fonts use local/system fallbacks; licensed fonts, proprietary logos, trackers, forms and live-site scripts are not redistributed. CSS is embedded for offline portability. The downloadable research index is optional: **do not replace an existing homepage, robots.txt or sitemap.xml** with the archive's files. Integrate articles using the existing site's publishing workflow and confirm the final canonical URL. No CMS, hosting or DNS connection is created.
 
+### Branded social posts
+
+Social drafts now open a dedicated caption-and-image editor, not a page preview. Start from a finding or choose **Create social post from article** on a saved, approved page. The latter copies its evidence and publication into a separate draft; it does not publish or modify the original article.
+
+Choose **Photo-led news**, **Big statistic**, or **Mini infographic**. Cards are 1080 × 1350 with publication colors, the exact data period, source and limitations. Photo-led cards use a saved cover illustration, dark overlay and bold headline; generated imagery is labeled illustrative. Optional three-slide carousels add ranking and context cards. All numeric graphics come from the saved evidence, not image-model text. Custom headlines and captions still require human factual review.
+
+Use **Write social caption** after saving, or edit manually. Add an optional HTTPS article URL; verify it is live. A reference screenshot (PNG/JPEG, up to 8 MB) can be saved privately beside the editor, with design notes. This is a manual reference board, **not automatic AI style extraction**. Reference screenshots are never reused as post photos or included in exports. Removing a reference detaches it; its private archived original remains stored.
+
+Save and approve to copy the caption or download the selected card as PNG/SVG. The social ZIP includes all SVG slides, caption, CSV, evidence and methodology separately—not an HTML page. PNG conversion runs locally in the browser. Nothing posts or schedules to a social account. Image layouts add no AI charge; existing optional AI caption/cover generation uses the configured OpenAI key.
+
+Migration **010_social_posts.sql** adds draft design settings and private reference metadata, protected with RLS. Railway's existing pre-deploy migration command applies it. No new environment variables or crash-data reimport are required; original reference images use the existing private storage bucket.
+
 ### Infographics
 
 Open an article in **Editorial → Infographic → Create infographic preview**. This builds a branded 1200-pixel-wide graphic from the current headline and saved evidence: dates, exact query filters, full-query crash totals, up to five returned ranked groups, source attribution and key limitations. Height adapts to the content. Publication name and colors follow the chosen profile. No image model, API charge, background job or new crash query is involved. The infographic is separate from the cover illustration; it never changes the article or its approval state.

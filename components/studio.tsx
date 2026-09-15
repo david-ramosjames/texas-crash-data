@@ -89,6 +89,7 @@ import { identify } from '@/lib/csv';
 import { EditorialAssets, PublicationPreview } from './editorial-assets';
 import { publicationTheme } from '@/lib/publication-profiles';
 import { InfographicPanel } from './infographic-panel';
+import { SocialEditor } from './social-editor';
 import { headlineIdeas } from '@/lib/editorial';
 import { IdeasInbox } from './ideas-inbox';
 import { ExtraFilters, ComparisonFilter } from './research-fields';
@@ -1060,6 +1061,7 @@ export default function Studio() {
                           <span className="fine-print">
                             Saved evidence snapshot
                           </span>
+                          {dirty && <span className="fine-print">Save changes to enable AI writing, navigation, and exports.</span>}
                           {data.ai.connected && (
                             <Button
                               variant="outline"
@@ -1075,13 +1077,14 @@ export default function Studio() {
                                 })
                               }
                             >
-                              <Sparkles /> Write full article
+                              <Sparkles /> {draft.channel==='social'?'Write social caption':'Write full article'}
                             </Button>
                           )}
                           <Button variant="outline" disabled={!!busy || dirty} onClick={()=>action('Preparing article',async()=>{const r=await api('article-template/'+draft.id,{});edit({body:r.body});setNotice(r.notice);})}>Refresh evidence-based draft</Button>
+                          {draft.channel==='page' && draft.status==='approved' && <Button variant="outline" disabled={!!busy||dirty} onClick={()=>action('Creating social post',async()=>{const r=await api('drafts',{sourceDraftId:draft.id,channel:'social'});const next=await refresh();setDraft(next.drafts.find((x:Draft)=>x.id===r.id));setDirty(false);setEditTab('write');})}>Create social post from article</Button>}
                         </div>
                         <div className="field">
-                          <label htmlFor="draft-title">Headline</label>
+                          <label htmlFor="draft-title">{draft.channel==='social'?'Internal post title':'Headline'}</label>
                           <Input
                             id="draft-title"
                             className="headline-input"
@@ -1090,7 +1093,7 @@ export default function Studio() {
                           />
                           <details><summary className="fine-print">Headline ideas</summary><div className="grid gap-2 mt-2">{headlineIdeas(draft.evidence).map(title=><button key={title} type="button" className="text-left text-sm text-blue-700" onClick={()=>edit({title})}>{title}</button>)}</div></details>
                         </div>
-                        <Tabs
+                        {draft.channel==='social' ? <><SocialEditor key={draft.id} draft={draft} domain={domains.find(x=>x.id===draft.domain_id)} drafts={drafts} domains={domains} edit={edit} dirty={dirty}/><details><summary>Evidence &amp; full methodology</summary><EvidencePanel e={draft.evidence}/></details></> : <Tabs
                           value={editTab}
                           onValueChange={(v) => setEditTab(String(v))}
                         >
@@ -1127,7 +1130,7 @@ export default function Studio() {
                           <TabsContent value="infographic">
                             <InfographicPanel key={draft.id} draft={draft} domain={domains.find(x=>x.id===draft.domain_id)} dirty={dirty}/>
                           </TabsContent>
-                        </Tabs>
+                        </Tabs>}
                       </section>
                       <aside className="panel publishing-panel">
                         <h3>Publication settings</h3>
@@ -1147,9 +1150,9 @@ export default function Studio() {
                         <div className="fine-print" role="status" aria-live="polite">
                           <strong>{publicationTheme(domains.find((x) => x.id === draft.domain_id)).label}</strong>
                           <p>{publicationTheme(domains.find((x) => x.id === draft.domain_id)).description}</p>
-                          <p>Page preview, HTML, charts and ZIP exports use this style. Your text, cover and evidence stay unchanged. Save the selection before exporting.</p>
+                          <p>{draft.channel==='social'?'Social images use this publication’s colors.':'Page preview, HTML, charts and ZIP exports use this style.'} Your text, cover and evidence stay unchanged. Save the selection before exporting.</p>
                         </div>
-                        <div className="field">
+                        {draft.channel!=='social' && <><div className="field">
                           <label htmlFor="slug">Page URL slug</label>
                           <Input
                             id="slug"
@@ -1161,7 +1164,7 @@ export default function Studio() {
                           {domains.find((x) => x.id === draft.domain_id)
                             ?.host || 'your-domain.com'}
                           /{draft.slug}/
-                        </p>
+                        </p></>}
                         <div className="editor-checklist">
                           <ShieldCheck />
                           <h3>Before you approve</h3>
@@ -1192,7 +1195,9 @@ export default function Studio() {
                           <h3>Export package</h3>
                           {draft.status === 'approved' && !dirty ? (
                             <>
-                              {[
+                              {(draft.channel==='social' ? [
+                                ['zip','Social caption + image package'],['txt','Post caption (.txt)'],['social-image','Social image (SVG)'],['json','Evidence & methodology']
+                              ] : [
                                 ['zip', 'Complete article + image package'],
                                 ['html', 'Standalone web page'],
                                 ['svg', 'Verified ranking graphic'],
@@ -1200,7 +1205,7 @@ export default function Studio() {
                                 ['txt', 'Newsletter / social text'],
                                 ['csv', 'Research data table'],
                                 ['json', 'Evidence & methodology'],
-                              ].map(([f, l]) => (
+                              ]).map(([f, l]) => (
                                 <a
                                   key={f}
                                   href={`/api/export/${draft.id}?format=${f}`}
@@ -1219,7 +1224,7 @@ export default function Studio() {
                         </div>
                         <p className="fine-print">
                           Exports do not change your website or send any
-                          messages. Host the HTML on your chosen domain.
+                          messages. {draft.channel==='social'?'Copy your caption and attach the image on your social account.':'Host the HTML on your chosen domain.'}
                         </p>
                       </aside>
                     </div>

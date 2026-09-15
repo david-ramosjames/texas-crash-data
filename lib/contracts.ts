@@ -111,6 +111,8 @@ export type Finding = {
 };
 export type Cover = { id: string; url: string; alt: string; caption: string };
 export type Draft = {
+  social_json?: string;
+  social_reference_id?: string | null;
   cover_id?: string | null;
   cover?: Cover;
   id: string;

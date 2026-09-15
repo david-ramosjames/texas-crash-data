@@ -4,7 +4,7 @@ import { Button } from "./ui/button";
 import type { Draft, Domain } from "@/lib/contracts";
 import { renderInfographic } from "@/lib/infographic";
 
-async function pngFromSvg(svg: Blob) {
+export async function pngFromSvg(svg: Blob) {
   const url = URL.createObjectURL(svg);
   try {
     const image = new Image();
