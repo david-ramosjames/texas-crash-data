@@ -4,6 +4,7 @@ import { standaloneArticle } from "../lib/editorial-package";
 import { BUILTIN_COVER, starterArticle } from "../lib/editorial";
 import type { Evidence, Draft } from "../lib/contracts";
 import { PUBLICATION_PROFILES } from "../lib/publication-profiles";
+import { renderInfographic } from "../lib/infographic";
 const evidence: Evidence = {
   spec: {
     cohort: "truck",
@@ -63,6 +64,11 @@ const pages = await Promise.all(
   ),
 );
 createServer((req, res) => {
+  if (req.url === '/infographic.svg') {
+    res.writeHead(200, {'Content-Type':'image/svg+xml'});
+    res.end(renderInfographic(draft, PUBLICATION_PROFILES[0], true));
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   const host = new URL(req.url || "/", "http://127.0.0.1:3210").pathname.slice(1);
   res.end(

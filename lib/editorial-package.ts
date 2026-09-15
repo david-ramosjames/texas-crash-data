@@ -11,6 +11,7 @@ import {
 import { exportCSV, renderChart, renderPage } from "./export";
 import type { ZipEntry } from "./zip";
 import { publicationTheme } from "./publication-profiles";
+import { renderInfographic, infographicNotes } from "./infographic";
 export async function articleEntries(d: Draft, domain?: Domain): Promise<ZipEntry[]> {
   assertEditorialReady(d.body);
   const draft = await hydrateCover(d);
@@ -23,6 +24,8 @@ export async function articleEntries(d: Draft, domain?: Domain): Promise<ZipEntr
       text: `${draft.title}\n\n${composeEditorial(draft.body, draft.evidence)}`,
     },
     { name: "chart.svg", text: renderChart(draft, domain) },
+    { name: "infographic.svg", text: renderInfographic(draft, domain) },
+    { name: "infographic-methodology.txt", text: infographicNotes(draft) },
     { name: "data.csv", text: exportCSV(draft) },
     {
       name: "newsletter.txt",

@@ -30,6 +30,7 @@ import { assertEditorialReady, composeEditorial, starterArticle } from '@/lib/ed
 import { coverBytes, coverChoices, hydrateCover, queueCover, validateCover } from '@/lib/covers';
 import { articleEntries, standaloneArticle } from '@/lib/editorial-package';
 import { renderPublicationIndex } from '@/lib/publication-template';
+import { renderInfographic } from '@/lib/infographic';
 import type { ZipEntry } from '@/lib/zip';
 const assertFreshTime = (e:any) => { if(needsTimeRefresh(e)) throw new Error('This hour-based evidence predates the AM/PM correction. Run fresh research before drafting or exporting.'); };
 export const dynamic = 'force-dynamic';
@@ -155,8 +156,9 @@ async function handler(
             )
           : null;
         const format = url.searchParams.get('format') || 'html';
-        if (!['html', 'csv', 'json', 'txt','svg','zip'].includes(format))
+        if (!['html', 'csv', 'json', 'txt','svg','zip','infographic'].includes(format))
           throw new Error('Unsupported export format.');
+        if (format === 'infographic') return new Response(renderInfographic(draft,domain), { headers: {'Content-Type':'image/svg+xml','Content-Disposition':`attachment; filename="${draft.slug}-infographic.svg"`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; sandbox"} });
         if (format === 'zip') return new Response(zip(await articleEntries(draft,domain)), { headers: {'Content-Type':'application/zip','Content-Disposition':`attachment; filename="${draft.slug}.zip"`,'Cache-Control':'no-store'} });
         if (format === 'svg') return new Response(renderChart(draft,domain), { headers: {'Content-Type':'image/svg+xml','Content-Disposition':`attachment; filename="${draft.slug}-chart.svg"`,'Cache-Control':'no-store','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'"} });
         if (format === 'txt') assertEditorialReady(draft.body);

@@ -88,6 +88,7 @@ import { ImportRecovery, type RecoveryBatch } from '@/components/import-recovery
 import { identify } from '@/lib/csv';
 import { EditorialAssets, PublicationPreview } from './editorial-assets';
 import { publicationTheme } from '@/lib/publication-profiles';
+import { InfographicPanel } from './infographic-panel';
 import { headlineIdeas } from '@/lib/editorial';
 import { IdeasInbox } from './ideas-inbox';
 import { ExtraFilters, ComparisonFilter } from './research-fields';
@@ -1093,12 +1094,13 @@ export default function Studio() {
                           value={editTab}
                           onValueChange={(v) => setEditTab(String(v))}
                         >
-                          <TabsList variant="line">
+                          <TabsList variant="line" className="h-auto flex-wrap">
                             <TabsTrigger value="write">Write</TabsTrigger>
                             <TabsTrigger value="preview">
                               <Eye size={15} /> Page preview
                             </TabsTrigger>
                             <TabsTrigger value="evidence">Evidence</TabsTrigger>
+                            <TabsTrigger value="infographic">Infographic</TabsTrigger>
                           </TabsList>
                           <TabsContent value="write">
                             <p className="fine-print">Write a clear story above “Verified statistics”. Statistics and methods are rebuilt from the saved evidence when you save or export. AI drafts still need a human fact and language review.</p>
@@ -1121,6 +1123,9 @@ export default function Studio() {
                           </TabsContent>
                           <TabsContent value="evidence">
                             <EvidencePanel e={draft.evidence} />
+                          </TabsContent>
+                          <TabsContent value="infographic">
+                            <InfographicPanel key={draft.id} draft={draft} domain={domains.find(x=>x.id===draft.domain_id)} dirty={dirty}/>
                           </TabsContent>
                         </Tabs>
                       </section>
@@ -1191,6 +1196,7 @@ export default function Studio() {
                                 ['zip', 'Complete article + image package'],
                                 ['html', 'Standalone web page'],
                                 ['svg', 'Verified ranking graphic'],
+                                ['infographic', 'Branded infographic (SVG)'],
                                 ['txt', 'Newsletter / social text'],
                                 ['csv', 'Research data table'],
                                 ['json', 'Evidence & methodology'],
